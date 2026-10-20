@@ -1,0 +1,507 @@
+<?xml version="1.0"?>
+<!--
+  OPNsense configuration of one HA node, rendered by Terraform into the
+  instance metadata and pulled by the node (os-scw-lz, every minute). It holds
+  no secret: @@KEY@@ tokens are filled on the node from opnsense_secrets.
+  department-agnostic: every department lives in DEPT_NETS, so onboarding a department never changes it.
+  A running node applies policy changes (filter, NAT, aliases, routes) live;
+  any other change requires rebuilding the node (fw_generation).
+  Interfaces: ${ifs.wan} unused public NIC, ${ifs.hub} hub (CARP election VIP),
+  ${ifs.sync} sync, ${ifs.egress} egress (SNAT to the egress data VIP, default route
+  through two PGWs, admin SSH from the PGW bastions). The data VIPs are not
+  configured here: they live in IPAM, on the real MAC of the master.
+-->
+<opnsense>
+  <theme>opnsense</theme>
+  <sysctl version="1.0.2">
+    <item uuid="b1752c3d-11e2-4d2b-c3db-fc2bacde6f93">
+      <tunable>kern.ipc.maxsockbuf</tunable>
+      <value>33554432</value>
+      <descr>Maximum socket buffer size</descr>
+    </item>
+  </sysctl>
+
+  <system>
+    <serialspeed>115200</serialspeed>
+    <primaryconsole>serial</primaryconsole>
+    <optimization>normal</optimization>
+    <hostname>${hostname}</hostname>
+    <domain>localdomain</domain>
+%{ for d in system.dns ~}
+    <dnsserver>${d}</dnsserver>
+%{ endfor ~}
+    <dnsallowoverride>0</dnsallowoverride>
+    <timezone>${system.timezone}</timezone>
+    <timeservers>${join(" ", system.ntp)}</timeservers>
+    <language>en_US</language>
+    <prefer_ipv4>1</prefer_ipv4>
+
+    <!-- SSH only on egress, reached through the Public Gateway bastion. -->
+    <ssh>
+      <group>admins</group>
+      <enabled>enabled</enabled>
+      <interfaces>opt2</interfaces>
+      <permitrootlogin>1</permitrootlogin>
+      <passwordauth>0</passwordauth>
+      <port>22</port>
+    </ssh>
+
+    <!-- WebUI only on the sync network (reached through an SSH tunnel). No anti-lockout
+         rule: department traffic lands on the hub LAN and must never reach the GUI. -->
+    <webgui>
+      <protocol>https</protocol>
+      <port/>
+      <interfaces>opt1</interfaces>
+      <noantilockout>1</noantilockout>
+      <nodnsrebindcheck>1</nodnsrebindcheck>
+      <nohttpreferercheck>1</nohttpreferercheck>
+    </webgui>
+
+    <group uuid="6dcc1e72-4481-5cf0-96d5-f30d9242f78b">
+      <gid>1999</gid>
+      <name>admins</name>
+      <scope>system</scope>
+      <description>System Administrators</description>
+      <priv>page-all</priv>
+      <member>0</member>
+    </group>
+
+    <user uuid="3a41ddf3-6129-57f0-9c47-46d8ed65539f">
+      <uid>0</uid>
+      <name>root</name>
+      <disabled>0</disabled>
+      <scope>system</scope>
+      <password>@@ROOT_HASH@@</password>
+      <authorizedkeys>@@ADMIN_KEYS_B64@@</authorizedkeys>
+      <priv/>
+    </user>
+
+    <firmware version="1.0.1">
+      <mirror/>
+      <flavour/>
+      <plugins/>
+      <type/>
+    </firmware>
+
+    <disableconsolemenu>0</disableconsolemenu>
+    <usevirtualterminal>1</usevirtualterminal>
+    <disablenatreflection>yes</disablenatreflection>
+    <pf_share_forward>1</pf_share_forward>
+    <!-- Move the default route to the next upstream gateway when one is down. -->
+    <gw_switch_default>1</gw_switch_default>
+    <defaultgw4>EGRESS_PGW_A</defaultgw4>
+  </system>
+
+  <interfaces>
+    <wan>
+      <if>${ifs.wan}</if>
+      <descr>WAN (unused public NIC)</descr>
+      <enable>1</enable>
+      <ipaddr>dhcp</ipaddr>
+      <blockpriv>0</blockpriv>
+      <blockbogons>0</blockbogons>
+    </wan>
+
+    <!-- Private Network legs are static (= their IPAM reservations). Every PN
+         announces the VPC router as 169.254.169.254: with DHCP, the leases
+         raced the static routes at boot and the host route to 169.254.169.254
+         could land on the sync leg. Static legs + far gateway pin it to hub. -->
+    <lan>
+      <if>${ifs.hub}</if>
+      <descr>hub</descr>
+      <enable>1</enable>
+      <ipaddr>${hub_ip}</ipaddr>
+      <subnet>${hub_prefix}</subnet>
+    </lan>
+
+    <opt1>
+      <if>${ifs.sync}</if>
+      <descr>sync</descr>
+      <enable>1</enable>
+      <ipaddr>${sync_ip}</ipaddr>
+      <subnet>${sync_prefix}</subnet>
+    </opt1>
+
+    <opt2>
+      <if>${ifs.egress}</if>
+      <descr>egress</descr>
+      <enable>1</enable>
+      <ipaddr>${egress_ip}</ipaddr>
+      <subnet>${egress_prefix}</subnet>
+    </opt2>
+
+    <lo0>
+      <internal_dynamic>1</internal_dynamic>
+      <descr>Loopback</descr>
+      <enable>1</enable>
+      <if>lo0</if>
+      <ipaddr>127.0.0.1</ipaddr>
+      <subnet>8</subnet>
+      <type>none</type>
+      <virtual>1</virtual>
+    </lo0>
+  </interfaces>
+
+  <!-- CARP VIP: master election only (drives pfsync and the failover hook,
+       which moves the IPAM data VIPs). Its virtual MAC carries no traffic. -->
+  <virtualip version="1.0.1">
+%{ for net, vip in vips ~}
+    <vip uuid="7796d8e2-a39b-5775-b7c3-1b4659c2d1${format("%02d", vip.vhid)}">
+      <interface>${net == "hub" ? "lan" : "opt2"}</interface>
+      <mode>carp</mode>
+      <subnet>${vip.ip}</subnet>
+      <subnet_bits>${net == "hub" ? hub_prefix : egress_prefix}</subnet_bits>
+      <gateway/>
+      <noexpand>0</noexpand>
+      <nobind>0</nobind>
+      <password>@@CARP_PASS@@</password>
+      <vhid>${vip.vhid}</vhid>
+      <advbase>1</advbase>
+      <advskew>${carp_advskew}</advskew>
+      <peer>${carp_peer[net]}</peer>
+      <peer6/>
+      <nosync>0</nosync>
+      <descr>${net} CARP VIP</descr>
+    </vip>
+%{ endfor ~}
+  </virtualip>
+
+  <!-- pfsync states over the HA VPC. No XMLRPC config sync: both nodes render
+       the same policy from the instance metadata (os-scw-lz), so rebuilding a
+       node can never overwrite its peer. -->
+  <hasync version="1.0.2">
+    <disablepreempt>1</disablepreempt>
+    <disconnectppps>0</disconnectppps>
+    <pfsyncinterface>opt1</pfsyncinterface>
+    <pfsyncpeerip>${pfsync_peer}</pfsyncpeerip>
+    <pfsyncversion>1400</pfsyncversion>
+    <synchronizetoip/>
+    <verifypeer>0</verifypeer>
+    <username/>
+    <password/>
+    <syncitems/>
+  </hasync>
+
+  <gateways>
+    <defaultgw4>EGRESS_PGW_A</defaultgw4>
+  </gateways>
+
+  <nat>
+    <outbound>
+      <mode>hybrid</mode>
+      <rule>
+        <source>
+          <network>DEPT_NETS</network>
+        </source>
+        <destination>
+          <any>1</any>
+        </destination>
+        <descr>[NAT] SRC=DEPT_NETS DST=INTERNET ACT=SNAT TARGET=EGRESS_DATA_VIP</descr>
+        <category/>
+        <interface>opt2</interface>
+        <tag/>
+        <tagged/>
+        <poolopts/>
+        <poolopts_sourcehashkey/>
+        <ipprotocol>inet</ipprotocol>
+        <target>${egress_vip}</target>
+        <sourceport/>
+      </rule>
+%{ for n in nat_rules ~}
+      <rule>
+        <source>
+          ${n.source}
+        </source>
+        <destination>
+          ${n.destination}
+        </destination>
+        <descr>${n.description}</descr>
+        <category/>
+        <interface>opt2</interface>
+        <tag/>
+        <tagged/>
+        <poolopts/>
+        <poolopts_sourcehashkey/>
+        <ipprotocol>inet</ipprotocol>
+        <target>${n.target}</target>
+        <sourceport/>
+      </rule>
+%{ endfor ~}
+    </outbound>
+  </nat>
+
+  <!-- Floating quick rules, top-down. Anything unmatched hits the default deny.
+       Transit rules (DSI, VPN, EGRESS) use sloppy state: pfsync only pushes
+       TCP windows every 128 packets, so after a failover the new master saw
+       live sessions as out of window (state-mismatch) and they froze. Sloppy
+       keeps the address/port state and drops the sequence check: measured,
+       a download resumed after a 2 s stall. -->
+  <filter>
+    <rule uuid="a0000000-0000-0000-0000-000000000001">
+      <type>pass</type>
+      <ipprotocol>inet</ipprotocol>
+      <protocol>tcp</protocol>
+      <statetype>keep state</statetype>
+      <descr>[MGMT] SRC=EGRESS_PGWS DST=SELF PORT=22 ACT=PASS (bastions)</descr>
+      <direction>in</direction>
+      <floating>yes</floating>
+      <interface>opt2</interface>
+      <quick>1</quick>
+      <log>1</log>
+      <source><network>EGRESS_PGWS</network></source>
+      <destination>
+        <network>opt2ip</network>
+        <port>22</port>
+      </destination>
+    </rule>
+
+    <rule uuid="a0000000-0000-0000-0000-000000000002">
+      <type>pass</type>
+      <ipprotocol>inet</ipprotocol>
+      <statetype>keep state</statetype>
+      <descr>[HA] SRC=SYNC_NET ACT=PASS (pfsync)</descr>
+      <direction>in</direction>
+      <floating>yes</floating>
+      <interface>opt1</interface>
+      <quick>1</quick>
+      <log>0</log>
+      <source><network>${sync_cidr}</network></source>
+      <destination><any>1</any></destination>
+    </rule>
+
+    <!-- Transit traffic leaves through the hub leg (inter-department) or the
+         egress leg (Internet, SNAT). Without this rule OPNsense's default
+         "pass out all keep state" adds a second, strict state on the way out,
+         and those sessions froze after a failover (state-mismatch). What may
+         enter is decided by the in rules below. -->
+    <rule uuid="a0000000-0000-0000-0000-000000000003">
+      <type>pass</type>
+      <ipprotocol>inet</ipprotocol>
+      <statetype>sloppy state</statetype>
+      <descr>[OUT] DIR=OUT ACT=PASS (sloppy, see above)</descr>
+      <direction>out</direction>
+      <floating>yes</floating>
+      <interface>lan,opt2</interface>
+      <quick>1</quick>
+      <log>0</log>
+      <source><any>1</any></source>
+      <destination><any>1</any></destination>
+    </rule>
+%{ for r in rules ~}
+
+    <rule uuid="${r.uuid}">
+      <type>${r.action}</type>
+      <ipprotocol>inet</ipprotocol>
+%{ if r.protocol != "any" ~}
+      <protocol>${r.protocol}</protocol>
+%{ endif ~}
+%{ if r.action == "pass" ~}
+      <statetype>${r.state} state</statetype>
+%{ endif ~}
+      <descr>${r.description}</descr>
+      <direction>in</direction>
+      <floating>yes</floating>
+      <interface>${r.iface}</interface>
+      <quick>1</quick>
+      <log>${r.log ? 1 : 0}</log>
+      <source>${r.source_xml}</source>
+%{ if r.destination_not ~}
+      <destination>
+        <not>1</not>
+        ${r.destination_xml}
+      </destination>
+%{ else ~}
+      <destination>${r.destination_xml}</destination>
+%{ endif ~}
+    </rule>
+%{ endfor ~}
+  </filter>
+
+  <!-- Departments and on-prem are reached through the hub VPC router and its peerings. -->
+  <staticroutes version="1.0.0">
+    <route uuid="b0000000-0000-0000-0000-000000000001">
+      <network>${dept_supernet}</network>
+      <gateway>HUB_VROUTER</gateway>
+      <descr>Department supernet via hub</descr>
+      <disabled>0</disabled>
+    </route>
+%{ for i, cidr in vpn_cidrs ~}
+    <route uuid="b0000000-0000-0000-0001-${format("%012d", i)}">
+      <network>${cidr}</network>
+      <gateway>HUB_VROUTER</gateway>
+      <descr>On-prem (VPN) via hub -> egress</descr>
+      <disabled>0</disabled>
+    </route>
+%{ endfor ~}
+  </staticroutes>
+
+  <rrd>
+    <enable/>
+  </rrd>
+
+  <ntpd>
+    <prefer>${system.ntp[0]}</prefer>
+  </ntpd>
+
+  <revision>
+    <description>Landing zone bootstrap - ${hostname}</description>
+    <time>0</time>
+  </revision>
+
+  <OPNsense>
+    <!--
+      Gateways in the MVC format OPNsense 26.x migrates to. Written directly so
+      the far gateway (fargw) survives: the legacy -> MVC migration drops it,
+      which silently removed HUB_VROUTER and its static routes (seen live).
+      - HUB_VROUTER: Scaleway VPC router, always 169.254.169.254 on-link.
+      - EGRESS_PGW_A/B: same priority order on both nodes so a firewall
+        failover keeps the same PGW (and its NAT state); dpinger monitors an
+        Internet address through each PGW and gw_switch_default moves the
+        default route to B when A fails.
+    -->
+    <Gateways version="1.0.0">
+      <gateway_item uuid="c0000001-0000-0000-0000-000000000001">
+        <disabled>0</disabled>
+        <name>HUB_VROUTER</name>
+        <descr>Hub VPC router (169.254.169.254, on-link) - Departments and on-prem through peering</descr>
+        <interface>lan</interface>
+        <ipprotocol>inet</ipprotocol>
+        <gateway>${hub_vrouter_ip}</gateway>
+        <defaultgw>0</defaultgw>
+        <fargw>1</fargw>
+        <monitor_disable>1</monitor_disable>
+        <monitor_noroute>0</monitor_noroute>
+        <monitor_killstates>0</monitor_killstates>
+        <monitor_killstates_priority>0</monitor_killstates_priority>
+        <monitor/>
+        <force_down>0</force_down>
+        <priority>255</priority>
+        <weight>1</weight>
+      </gateway_item>
+%{ for g in [{ k = "b", prio = 2, monitor = monitors.b, role = "Internet backup" }, { k = "a", prio = 1, monitor = monitors.a, role = "Internet" }] ~}
+      <gateway_item uuid="c0000001-0000-0000-0000-00000000000${g.k == "a" ? 2 : 3}">
+        <disabled>0</disabled>
+        <name>EGRESS_PGW_${upper(g.k)}</name>
+        <descr>Egress Public Gateway ${upper(g.k)} (${pgw[g.k].zone}) - ${g.role}</descr>
+        <interface>opt2</interface>
+        <ipprotocol>inet</ipprotocol>
+        <gateway>${pgw[g.k].ip}</gateway>
+        <defaultgw>1</defaultgw>
+        <fargw>0</fargw>
+        <monitor_disable>0</monitor_disable>
+        <monitor_noroute>0</monitor_noroute>
+        <monitor_killstates>0</monitor_killstates>
+        <monitor_killstates_priority>0</monitor_killstates_priority>
+        <monitor>${g.monitor}</monitor>
+        <force_down>0</force_down>
+        <priority>${g.prio}</priority>
+        <weight>1</weight>
+      </gateway_item>
+%{ endfor ~}
+    </Gateways>
+    <Firewall>
+      <Alias version="1.0.1">
+        <geoip>
+          <url/>
+        </geoip>
+        <aliases>
+          <alias uuid="c0000000-0000-0000-0000-000000000001">
+            <enabled>1</enabled>
+            <name>DEPT_NETS</name>
+            <type>network</type>
+            <proto/>
+            <interface/>
+            <counters>0</counters>
+            <updatefreq/>
+            <content>${dept_supernet}</content>
+            <description>All department Pub and Private networks</description>
+          </alias>
+          <alias uuid="c0000000-0000-0000-0000-000000000002">
+            <enabled>1</enabled>
+            <name>DSI_EGRESS_NET</name>
+            <type>network</type>
+            <proto/>
+            <interface/>
+            <counters>0</counters>
+            <updatefreq/>
+            <content>${egress_cidr}</content>
+            <description>DSI Egress network (LB, Edge Services, VPN gateway)</description>
+          </alias>
+          <alias uuid="c0000000-0000-0000-0000-000000000003">
+            <enabled>1</enabled>
+            <name>ONPREM_VPN</name>
+            <type>network</type>
+            <proto/>
+            <interface/>
+            <counters>0</counters>
+            <updatefreq/>
+            <content>${join("\n", vpn_cidrs)}</content>
+            <description>On-prem networks reached through the S2S VPN</description>
+          </alias>
+          <alias uuid="c0000000-0000-0000-0000-000000000005">
+            <enabled>1</enabled>
+            <name>EGRESS_PGWS</name>
+            <type>host</type>
+            <proto/>
+            <interface/>
+            <counters>0</counters>
+            <updatefreq/>
+            <content>${pgw.a.ip}
+${pgw.b.ip}</content>
+            <description>Egress Public Gateways (SSH bastions)</description>
+          </alias>
+          <alias uuid="c0000000-0000-0000-0000-000000000004">
+            <enabled>1</enabled>
+            <name>internal_nets</name>
+            <type>network</type>
+            <proto/>
+            <interface/>
+            <counters>0</counters>
+            <updatefreq/>
+            <content>${join("\n", internal_nets)}</content>
+            <description>Private and landing zone ranges - excluded from Internet egress</description>
+          </alias>
+%{ for name, a in extra_aliases ~}
+          <alias uuid="${a.uuid}">
+            <enabled>1</enabled>
+            <name>${name}</name>
+            <type>network</type>
+            <proto/>
+            <interface/>
+            <counters>0</counters>
+            <updatefreq/>
+            <content>${join("\n", a.cidrs)}</content>
+            <description>Policy alias</description>
+          </alias>
+%{ endfor ~}
+        </aliases>
+      </Alias>
+    </Firewall>
+%{ if length(syslog) > 0 ~}
+    <!-- Remote syslog. Platform setting (outside the live-applied sections).
+         Model layout (OPNsense 26.1) not yet validated on a real node. -->
+    <Syslog version="1.0.2">
+      <general>
+        <enabled>1</enabled>
+        <loglocal>1</loglocal>
+      </general>
+      <destinations>
+%{ for d in syslog ~}
+        <destination uuid="${d.uuid}">
+          <enabled>1</enabled>
+          <transport>${d.transport}</transport>
+          <program/>
+          <level/>
+          <facility/>
+          <hostname>${d.host}</hostname>
+          <certificate/>
+          <port>${d.port}</port>
+          <rfc5424>1</rfc5424>
+          <description>${d.description}</description>
+        </destination>
+%{ endfor ~}
+      </destinations>
+    </Syslog>
+%{ endif ~}
+  </OPNsense>
+</opnsense>

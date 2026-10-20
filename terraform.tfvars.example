@@ -1,0 +1,105 @@
+# Copy to terraform.tfvars (not committed) and adapt.
+
+# --- Hub (DSI) ------------------------------------------------------------------
+
+# Public IPs allowed on the Public Gateway SSH bastion.
+admin_cidrs           = ["203.0.113.10/32"]
+admin_ssh_public_keys = ["ssh-ed25519 AAAA_REPLACE_ME admin@dsi"]
+
+# Golden image snapshot of each zone (docs/IMAGE.md), or a zone-local image ID
+# or an SBS volume "<zone>/<uuid>". The node zones also set the zones of the
+# Public Gateways and VPN gateways.
+firewall = {
+  instance_type = "POP2-2C-8G"
+  nodes = {
+    fw1 = { zone = "fr-par-1", snapshot_id = "fr-par-1/<uuid of the golden snapshot>" }
+    fw2 = { zone = "fr-par-2", snapshot_id = "fr-par-2/<uuid of the golden snapshot>" }
+  }
+}
+
+# Inspected on-prem access (Egress VPC). Uncomment to enable.
+# vpn = {
+#   customer_gateway_ip = "198.51.100.1"
+#   customer_asn        = 65010
+#   onprem_cidrs        = ["192.168.0.0/16"]
+# }
+
+# Uninspected on-prem access for department Private VPCs (Hybrid VPC). Uncomment to enable.
+# interlink = {
+#   pop_id         = "fr-par/<pop-uuid>"
+#   bandwidth_mbps = 1000
+#   partner_id     = "fr-par/<partner-uuid>"
+#   onprem_cidrs   = ["10.10.0.0/16"]
+# }
+
+# --- Departments ----------------------------------------------------------------
+# Single source of truth for the address plan and the network policy the DSI
+# imposes on each department. Adding an entry creates its project, VPCs and
+# NACLs; removing one destroys them.
+#
+# index (0-1023)   permanent and unique: sets the department CIDRs
+#                  (Pub /22 from 10.64.0.0/12, Private /21 from 10.96.0.0/11).
+#                  Never renumber a live department; keep the index of a
+#                  destroyed department reserved until its project is fully gone.
+# hybrid_bypass    peer the department Private VPC with the Hybrid VPC (Interlink,
+#                  no firewall inspection). Needs interlink above. Costs 2 extra
+#                  peering connectors.
+# nacl_inbound     flows allowed INTO the department from outside it (on-prem, DSI
+#                  LB, other departments once the firewall allows them). The
+#                  department NACLs drop every other inbound connection.
+#                  { to: "pub"|"private", source: CIDR, protocol: ANY|TCP|UDP|ICMP,
+#                    port: 0 = all, port_end: optional range end, description }
+departments = {
+  genomic = {
+    index         = 1
+    hybrid_bypass = false # true once interlink is set
+    nacl_inbound = [
+      {
+        to          = "private"
+        source      = "10.0.4.0/24" # DSI Egress (LB / Edge Services of the DSI)
+        port        = 8080
+        description = "DSI load balancers to genomic backends"
+      },
+    ]
+  }
+}
+
+# --- Firewall policy (optional) -------------------------------------------------
+# Extends the firewall policy. Policy changes are pulled live by the firewalls
+# within a minute, no rebuild.
+#
+# Ordering: rules are evaluated top-down, first match wins (quick rules). Your
+# rules are rendered BEFORE the default ones ([EW] inter-department block, [DSI],
+# [VPN], [EGRESS]), so an exception to the inter-department block works as is.
+# Rule descriptions must be unique and free of <, > and &.
+#
+# aliases: name => CIDRs. Built-in aliases usable in rules: DEPT_NETS,
+# DSI_EGRESS_NET, ONPREM_VPN, EGRESS_PGWS, internal_nets.
+#
+# rules: action pass|block, interface hub (default)|egress, protocol
+# any|tcp|udp|icmp, state sloppy (default)|keep, optional port / port_end
+# (tcp and udp only). source / destination: alias, CIDR or any.
+#
+# nat_outbound: SNAT on the egress interface; target defaults to the egress
+# data VIP.
+#
+# policy = {
+#   aliases = {
+#     DEPT_GENOMIC = ["10.96.8.0/21"]  # Private of the department with index 1
+#     DEPT_HR      = ["10.96.16.0/21"] # Private of the department with index 2
+#     # (a department's CIDRs: terraform output departments)
+#   }
+#   rules = [
+#     {
+#       description = "Genomic reaches HR over HTTPS"
+#       action      = "pass"
+#       source      = "DEPT_GENOMIC"
+#       destination = "DEPT_HR"
+#       protocol    = "tcp"
+#       port        = 443
+#     },
+#   ]
+#   nat_outbound = [
+#     { description = "Genomic SNAT to the Internet", source = "DEPT_GENOMIC" },
+#   ]
+# }

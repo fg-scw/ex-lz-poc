@@ -1,0 +1,4 @@
+# Scaleway landing zone (os-scw-lz): pull the configuration from the instance
+# metadata and keep the data VIPs on the CARP master.
+* * * * * root /usr/local/opnsense/scripts/scwlz/sync.sh cron
+* * * * * root /usr/local/opnsense/scripts/scwlz/vip.sh reconcile

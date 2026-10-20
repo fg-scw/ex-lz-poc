@@ -1,0 +1,15 @@
+# Secrets and environment-specific values: never commit.
+backend.hcl
+terraform.tfvars
+*.auto.tfvars
+.env
+
+# Terraform working files (the root .terraform.lock.hcl is committed)
+.terraform/
+*.tfstate
+*.tfstate.*
+crash.log
+# Lock files from local `terraform test` runs of the modules
+modules/*/.terraform.lock.hcl
+
+.DS_Store
