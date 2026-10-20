@@ -144,3 +144,7 @@ Déploiement testé sur Scaleway (fr-par-1 et fr-par-2) avec Terraform 1.15.5, l
 - [docs/DEPLOIEMENT.md](docs/DEPLOIEMENT.md) : déployer pas à pas, exploiter, dépanner, détruire.
 - [docs/CONFIGURATION.md](docs/CONFIGURATION.md) : toutes les options.
 - [docs/IMAGE.md](docs/IMAGE.md) : l'image golden et le plugin.
+
+## Licence
+
+Apache License 2.0 : voir [LICENSE](LICENSE).
