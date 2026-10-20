@@ -62,7 +62,7 @@ resource "scaleway_instance_user_data" "scwlz" {
 
   lifecycle {
     # Replaced with its server, hence destroyed while the old server still
-    # exists: an in-place update waits on the old server and fails (seen live).
+    # exists: an in-place update waits on the old server and fails.
     replace_triggered_by = [scaleway_instance_server.fw[each.key].id]
   }
 }

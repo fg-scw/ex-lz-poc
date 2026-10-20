@@ -7,7 +7,7 @@ output "firewall" {
 }
 
 output "failover_commands" {
-  description = "Manual fallback if the hook failed (see the scw-vip syslog): run the line of the CARP MASTER to move the data VIPs to it from its peer."
+  description = "Manual fallback if the hook failed (see the scwlz-vip syslog): run the line of the CARP MASTER to move the data VIPs to it from its peer."
   value       = module.hub.failover_commands
 }
 

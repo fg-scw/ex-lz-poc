@@ -14,7 +14,7 @@ locals {
 
   # Next hop of the firewall routes towards the hub VPC router. On Scaleway
   # Private Networks the VPC router answers on 169.254.169.254 (on-link), not on
-  # the first host of the subnet (validated on a real deployment).
+  # the first host of the subnet.
   hub_vrouter_ip = "169.254.169.254"
 
   # One Public Gateway per firewall zone. Both firewalls prefer pgw "a" (fw1

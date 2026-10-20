@@ -32,8 +32,7 @@ CONF=/usr/local/etc/scwlz.conf
 log() { logger -p daemon.notice -t scwlz "$*"; }
 # A random privileged source port per request: with a fixed range curl always
 # binds the same first free port, and a request within the TIME_WAIT of the
-# previous one (60 s) then fails at once (seen live: the cron never got its
-# configuration).
+# previous one (60 s) then fails at once.
 md() { curl -s -m 8 --local-port "$(jot -r 1 600 1000)-1023" "$@"; }
 
 T=$(mktemp -d /tmp/scwlz.XXXXXX) || exit 1
@@ -128,15 +127,15 @@ rm -f "$D/pending.hash"
 
 if [ -n "$first" ] || [ "$mode" = boot ]; then
   # A full configuration is applied by a reboot, not rc.reload_all: a live
-  # reload left a node without DNS and with a partial ruleset (seen live),
-  # while a boot applies everything, and pfsync's boot-time demotion keeps a
+  # reload can leave a node without DNS and with a partial ruleset, while a
+  # boot applies everything, and pfsync's boot-time demotion keeps a
   # returning node BACKUP.
   log "configuration $new stored, rebooting to apply it"
   ( sleep 10; shutdown -r now ) </dev/null >/dev/null 2>&1 &
 else
   # Model migrations, as the boot runs them (convert_config): they fill the
   # settings the template leaves out. Without them a live apply differed from
-  # the boot, e.g. IPv6 allowed instead of blocked (seen live).
+  # the boot, e.g. IPv6 allowed instead of blocked.
   pluginctl -m >/dev/null
   configctl filter reload >/dev/null
   configctl interface routes configure >/dev/null

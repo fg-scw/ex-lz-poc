@@ -9,7 +9,7 @@
 locals {
   # CARP only elects the master: its VIP (virtual MAC) carries no traffic.
   # Scaleway hypervisors only accept a NIC's own MAC, so frames to a CARP
-  # virtual MAC are flooded as BUM (35-45 % loss measured). The data-plane
+  # virtual MAC are flooded as BUM traffic, which causes heavy loss. The data-plane
   # VIPs (data_vips) are IPAM reservations attached to the *real* NIC MAC of
   # the master, moved by the CARP hook (failover.tf).
   carp_vhid = 10
@@ -164,8 +164,8 @@ resource "scaleway_ipam_ip" "data_vip" {
   }
 
   # The provider detaches from the MAC in the state; after a failover the
-  # API refuses that (412, seen live). Move the VIP back to it first.
-  # ponytail: needs the scw CLI on the runner, like fw_first_boot.
+  # API refuses that (412). Move the VIP back to it first.
+  # Needs the scw CLI on the runner, like fw_first_boot.
   provisioner "local-exec" {
     when    = destroy
     command = <<-EOT
@@ -178,7 +178,7 @@ resource "scaleway_ipam_ip" "data_vip" {
 
 # Rebuilding a node = replacing its generation: server and (snapshot) volume
 # are recreated together, so a rebuilt firewall never boots on a disk left
-# dirty by the previous server (seen live: fsck prompt, node unreachable).
+# dirty by the previous server (an fsck prompt would leave the node unreachable).
 #   terraform apply -replace='terraform_data.fw_generation["fw1"]'
 resource "terraform_data" "fw_generation" {
   for_each = local.fw
@@ -238,7 +238,7 @@ resource "scaleway_instance_server" "fw" {
     # The node deletes its secrets once stored, and scwlz is managed below
     # (it needs the NIC MACs). A rebuilt node gets the secrets again.
     # type: changing it would stop and start both nodes at once; it only
-    # applies to a rebuilt node (-replace one node at a time, docs/DEPLOIEMENT.md "Monter de version").
+    # applies to a rebuilt node (-replace one node at a time, see README.md).
     ignore_changes       = [type, user_data["opnsense_secrets"], user_data["scwlz"]]
     replace_triggered_by = [terraform_data.fw_generation[each.key]]
   }
@@ -280,7 +280,7 @@ locals {
 # The server boots before its private NICs exist; one reboot after they are
 # attached lets OPNsense apply the bootstrap config. Runs only when a node is
 # (re)created, never on config changes.
-# ponytail: needs the scw CLI on the runner; drop it if the image learns to hot-plug NICs.
+# Needs the scw CLI on the runner; drop it if the image learns to hot-plug NICs.
 resource "terraform_data" "fw_first_boot" {
   for_each = local.fw
 

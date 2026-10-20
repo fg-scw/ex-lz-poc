@@ -234,8 +234,7 @@
        Transit rules (DSI, VPN, EGRESS) use sloppy state: pfsync only pushes
        TCP windows every 128 packets, so after a failover the new master saw
        live sessions as out of window (state-mismatch) and they froze. Sloppy
-       keeps the address/port state and drops the sequence check: measured,
-       a download resumed after a 2 s stall. -->
+       keeps the address/port state and drops the sequence check. -->
   <filter>
     <rule uuid="a0000000-0000-0000-0000-000000000001">
       <type>pass</type>
@@ -352,7 +351,7 @@
     <!--
       Gateways in the MVC format OPNsense 26.x migrates to. Written directly so
       the far gateway (fargw) survives: the legacy -> MVC migration drops it,
-      which silently removed HUB_VROUTER and its static routes (seen live).
+      which silently removed HUB_VROUTER and its static routes.
       - HUB_VROUTER: Scaleway VPC router, always 169.254.169.254 on-link.
       - EGRESS_PGW_A/B: same priority order on both nodes so a firewall
         failover keeps the same PGW (and its NAT state); dpinger monitors an
@@ -479,7 +478,7 @@ ${pgw.b.ip}</content>
     </Firewall>
 %{ if length(syslog) > 0 ~}
     <!-- Remote syslog. Platform setting (outside the live-applied sections).
-         Model layout (OPNsense 26.1) not yet validated on a real node. -->
+         Model layout as of OPNsense 26.1: check it when the OPNsense version changes. -->
     <Syslog version="1.0.2">
       <general>
         <enabled>1</enabled>

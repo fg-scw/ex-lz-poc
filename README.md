@@ -1,101 +1,106 @@
-# Landing zone Scaleway : hub and spoke avec firewall central en haute disponibilité
+# Landing zone Scaleway : hub and spoke avec firewall central
 
-Cette landing zone est le socle réseau d'une organisation Scaleway, écrit en Terraform. Elle s'adresse aux équipes qui veulent donner à chaque département (une unité métier) son propre projet Scaleway, tout en gardant le contrôle des flux au même endroit.
+Socle réseau d'une organisation Scaleway, écrit en Terraform. Un projet central (la DSI) héberge deux firewalls OPNsense en haute disponibilité, la sortie Internet, le VPN et Interlink. Chaque département a son propre projet, créé et détruit à la demande.
 
-Un projet central, la **DSI**, héberge deux firewalls OPNsense en haute disponibilité (un par zone), la sortie Internet, le VPN et Interlink. Chaque **département** a son propre projet, créé et détruit à la demande.
+**Garantie.** Tout flux qui sort d'un département, ou qui y entre depuis l'extérieur, passe par le firewall central. Seule exception : le contournement Interlink optionnel (`hybrid_bypass`). Ce qu'un département expose lui-même (Load Balancer, IP publique) n'est pas couvert : voir « Exposition directe » dans les limites.
 
-**Garantie.** Tout flux qui sort d'un département, ou qui y entre depuis l'extérieur, passe par le firewall central. Seule exception : le contournement Interlink optionnel (`hybrid_bypass`), qui relie un département à l'on-prem sans inspection. Ce qu'un département expose lui-même (Load Balancer, IP publique) n'est pas couvert : voir « Exposition directe » dans les limites.
+Un seul module racine, un seul state, un seul fichier de configuration : `terraform.tfvars`.
 
-Le tout se déploie avec un seul module racine, un seul state et un seul fichier de configuration (`terraform.tfvars`). Ajouter un département, c'est ajouter une entrée dans ce fichier, sans toucher aux firewalls. Relisez chaque `plan` avant l'`apply`.
+```text
+main.tf, variables.tf, outputs.tf   module racine
+terraform.tfvars.example            modèle de configuration
+modules/hub/                        DSI : VPC, firewalls, VPN, Interlink
+modules/department/                 un département : projet, VPC, NACL, IAM
+image/                              construction de l'image OPNsense
+tests/, modules/*/tests/            tests hors ligne
+docs/                               documentation
+```
 
 ## Architecture
 
-[![Architecture déployée : un projet DSI (VPC Egress avec deux Public Gateways, deux passerelles VPN et la VIP egress ; VPC HA ; VPC Hub avec la VIP hub, prochain saut des ingress rules, portée par le firewall OPNsense maître ; VPC Hybrid avec Interlink), et N projets départements dept-<nom> (VPC Pub transitif, VPC Private, NACL, peering de contournement Interlink optionnel). Tout flux sortant d'un département passe par le firewall ; seul Interlink vers Private le contourne. La landing zone ne déploie ni Load Balancer ni Edge Services : un département crée ses propres LB dans son VPC Pub.](docs/architecture.png)](docs/architecture.png)
-
-Cliquez sur le schéma pour l'ouvrir en grand.
-
-## Les briques
-
-- **Projet DSI.** Il contient quatre VPC (réseaux privés isolés) :
-  - *Egress* : deux Public Gateways (une par zone), deux passerelles VPN, et la patte « egress » des firewalls ;
-  - *HA* : un réseau réservé à la synchronisation entre les deux firewalls ;
-  - *Hub* : la patte « hub » des firewalls. Les ingress rules y envoient tout le trafic des départements vers le firewall actif ;
-  - *Hybrid* : Interlink, le lien privé vers l'on-prem, sans inspection.
-- **Firewalls OPNsense (fw1 en fr-par-1, fw2 en fr-par-2).** Un seul est actif (maître). Ils démarrent depuis l'**image golden** et lisent leur configuration dans les métadonnées de l'instance.
-- **Projets départements.** Chaque département a un VPC *Pub* (transitif) et un VPC *Private* (applications). Des NACL imposées par la DSI filtrent les deux. Son groupe IAM n'a aucun droit sur le réseau.
-- **Public Gateways.** Elles font sortir le trafic vers Internet (NAT) et servent de bastion SSH vers les firewalls.
-- **VPN site à site (optionnel).** Un tunnel IPsec par zone, avec BGP. Le trafic on-prem est inspecté par le firewall.
-- **Interlink (optionnel).** Les départements qui l'activent (`hybrid_bypass`) joignent l'on-prem sans passer par le firewall.
-- **VIP de données (IPAM).** Deux adresses réservées dans l'IPAM de Scaleway portent le trafic. Elles suivent le firewall maître.
-
-La landing zone ne déploie ni Load Balancer ni Edge Services, ni relais de journaux : un département crée ses propres LB et Edge Services (son groupe IAM a `LoadBalancersFullAccess` et `EdgeServicesFullAccess`) et souscrit lui-même son abonnement Edge Services. Les journaux des firewalls partent vers un collecteur par `firewall.syslog`.
+[![Architecture : projet DSI (VPC Egress, HA, Hub, Hybrid) et projets départements (VPC Pub et Private)](docs/architecture.png)](docs/architecture.png)
 
 | Flux | Chemin | Contrôle |
 |---|---|---|
-| Département → Internet | Private → Pub → Hub → firewall → Public Gateway | firewall, NAT sur la VIP egress |
+| Département → Internet | Private → Pub → Hub → firewall → Public Gateway | firewall, NAT |
 | Département A → département B | → Hub → firewall | bloqué par défaut ; NACL du département cible |
-| Pub ↔ Private (même département) | peering direct | NACL : Pub → Private ouvert |
+| Pub ↔ Private (même département) | peering direct | NACL |
 | On-prem (VPN) ↔ département | VPN → Egress → Hub → firewall | firewall et `nacl_inbound` |
-| On-prem (Interlink) ↔ département Private | Interlink → Hybrid → Private | **sans firewall** ; NACL ouverte aux CIDR on-prem |
-| Internet → département | LB que le département crée lui-même dans son VPC Pub | **hors firewall** : voir « Exposition directe » |
+| On-prem (Interlink) ↔ Private | Interlink → Hybrid → Private | sans firewall (`hybrid_bypass`) |
+| Internet → département | Load Balancer créé par le département | hors firewall |
 
-Le firewall ignore les départements : tous tiennent dans un seul bloc d'adresses (`dept_supernet`, `10.64.0.0/10`). Une ingress rule, un alias (`DEPT_NETS`) et une route statique suffisent, quel que soit le nombre de départements. L'`index` d'un département dans `departments` (`terraform.tfvars`) fixe ses adresses (1024 départements possibles, sans chevauchement).
+Un seul firewall est actif. Il porte deux adresses virtuelles (VIP) dans l'IPAM, que le plugin `os-scw-lz` déplace vers l'autre nœud en cas de bascule.
 
-### Notions réseau
+Schémas des mécanismes : [peering](docs/notion-1-vpc-peering.png), [transitivité](docs/notion-2-transitivite.png), [ingress rules](docs/notion-3-ingress-rules.png), [NACL](docs/notion-4-nacl.png), [flux asymétriques](docs/notion-5-flux-asymetriques.png).
 
-Cinq schémas courts expliquent les mécanismes de cette segmentation, avec l'exemple de `dept-genomic` :
+## Prérequis
 
-1. [VPC peering : un connecteur de chaque côté](docs/notion-1-vpc-peering.png)
-2. [Transitivité : Private atteint le Hub à travers Pub](docs/notion-2-transitivite.png)
-3. [Ingress rules : tout ce qui entre dans le Hub va au firewall](docs/notion-3-ingress-rules.png)
-4. [NACL : un filtre sans état sur chaque VPC de département](docs/notion-4-nacl.png)
-5. [Flux asymétriques : l'aller et le retour par le même chemin](docs/notion-5-flux-asymetriques.png)
+**Outils.**
 
-## Comment marche la bascule
+| Outil | Version minimale | Pourquoi |
+|---|---|---|
+| Terraform | 1.10 | `required_version = ">= 1.10"` |
+| Provider `scaleway/scaleway` | 2.86 (`~> 2.86`) | installé par `terraform init` |
+| Providers `hashicorp/random` (`~> 3.6`), `hashicorp/time` (`~> 0.12`) | idem | installés par `terraform init` |
+| CLI `scw` | récente | doit être sur la machine qui lance Terraform : elle redémarre les firewalls après l'ajout de leurs cartes réseau et déplace ou libère les VIP à la destruction |
+| `ssh` | | accès aux firewalls par le bastion |
 
-1. CARP, le protocole d'élection d'OPNsense, désigne le maître. Il ne porte aucun trafic, car Scaleway n'accepte que l'adresse MAC réelle d'une carte.
-2. Le trafic passe par deux VIP de l'IPAM, rattachées à la MAC réelle du maître : la VIP hub (prochain saut des ingress rules) et la VIP egress (source du NAT).
-3. Quand un nœud devient maître depuis 3 s, son plugin `os-scw-lz` déplace les deux VIP vers ses cartes par l'API IPAM, avec une clé dédiée.
-4. Un cron relance cette logique chaque minute et corrige les écarts. Un nœud qui revient reste BACKUP (pas de préemption).
-5. Mesuré (voir « État de validation ») : CARP désigne le nouveau maître en 13 à 14 s, les VIP le rejoignent en 16 à 17 s, et la coupure ICMP est de quelques secondes (5,6 à 6,2 s, mesurées avant l'ajout de la patte egress à la règle `[OUT]`). Les sessions TCP établies, entre départements comme vers Internet, survivent dans les deux sens grâce à la règle flottante `[OUT]` : elle passe les flux sortants des pattes hub et egress en *sloppy state*, avant la règle de sortie par défaut d'OPNsense. Une session ne survit jamais à la perte d'une Public Gateway (l'IP publique change), et une application doit savoir rouvrir une connexion.
+**Droits Scaleway.**
 
-Détails : [docs/IMAGE.md](docs/IMAGE.md).
+- Une clé API d'**organisation** : elle crée des projets, applications, politiques et clés IAM, et gère VPC, Instances, Block Storage, IPAM, Public Gateways et VPN. Une clé d'administrateur convient.
+- Un bucket Object Storage **privé et versionné** pour le state. Le state contient des secrets : réservez-le aux opérateurs.
+- Les zones `fr-par-1` et `fr-par-2` pour les firewalls (`fr-par-3` n'a pas de Public Gateway).
 
-## Image golden et configuration des firewalls
+**Image OPNsense.** Aucune image n'est publiée : construisez la vôtre avec `image/build.sh`, un snapshot par zone ([docs/IMAGE.md](docs/IMAGE.md#construire-limage)).
 
-Les firewalls démarrent depuis une **image golden** : OPNsense officiel plus le plugin `os-scw-lz`, sans aucun secret. Aucune image n'est publiée : construisez la vôtre avec `image/build.sh` ([docs/IMAGE.md](docs/IMAGE.md)), puis renseignez le snapshot de chaque zone dans `firewall.nodes`.
-
-La configuration des firewalls vient de `terraform.tfvars` : le module `hub` l'écrit dans les métadonnées de chaque instance. Le plugin `os-scw-lz` les relit chaque minute. La politique du client (`policy`) est appliquée à chaud, en moins d'une minute. Tout autre changement (plateforme, secrets, syslog) demande de reconstruire le nœud ; la configuration complète est lue au premier démarrage.
-
-## Glossaire
-
-| Terme | Sens |
-|---|---|
-| DSI | équipe et projet Scaleway qui possèdent le réseau central (le « hub », nommé `dsi-hub` par défaut) |
-| Département | une unité métier : un projet Scaleway, deux VPC (Pub et Private), un groupe IAM |
-| VPC | réseau privé isolé de Scaleway |
-| Private Network | sous-réseau d'un VPC, où se branchent les cartes réseau |
-| Public Gateway (PGW) | passerelle NAT vers Internet, avec un bastion SSH |
-| IPAM | service Scaleway qui gère les adresses IP privées |
-| VIP | adresse virtuelle qui suit le firewall maître |
-| CARP | protocole d'OPNsense qui élit le maître parmi les firewalls |
-| pfsync | synchronisation des sessions entre les deux firewalls |
-| Image golden | image OPNsense identique pour tous les clients, sans secret |
-| Métadonnées d'instance | données que Scaleway fournit à un serveur (`user_data`) |
-| Module racine, state unique | la racine du dépôt est le seul module déployé ; son state (clé `landing-zone/terraform.tfstate`) contient la DSI et tous les départements |
-| NACL | liste de règles réseau sans état, sur un VPC |
-
-## Démarrage rapide
-
-Prérequis, variables d'environnement et vérifications : [docs/DEPLOIEMENT.md](docs/DEPLOIEMENT.md).
+**Variables d'environnement.** Ne les versionnez jamais.
 
 ```bash
-cp terraform.tfvars.example terraform.tfvars   # puis adaptez-le
-terraform init -backend-config="bucket=<bucket>"
-terraform apply
+export SCW_ACCESS_KEY=<clé> SCW_SECRET_KEY=<secret> SCW_DEFAULT_ORGANIZATION_ID=<id-organisation>
+export AWS_ACCESS_KEY_ID=$SCW_ACCESS_KEY AWS_SECRET_ACCESS_KEY=$SCW_SECRET_KEY   # accès au bucket du state
+export STATE_BUCKET=<bucket-du-state>
 ```
 
-Les tests hors ligne (aucun appel à Scaleway) :
+La région (`fr-par`) est écrite dans `main.tf` ; c'est celle du bucket.
+
+## Déploiement
+
+Toutes les commandes se lancent depuis la racine du dépôt.
+
+1. Construire l'image, un snapshot par zone (variables : [docs/IMAGE.md](docs/IMAGE.md#construire-limage)) :
+
+   ```bash
+   BUILD_SERVER=<zone>/<uuid> BUILD_SSH=root@<hôte-de-build> ZONES="fr-par-1 fr-par-2" BUCKET=<bucket> image/build.sh
+   ```
+
+2. Créer la configuration :
+
+   ```bash
+   cp terraform.tfvars.example terraform.tfvars
+   ```
+
+   Renseignez au minimum `admin_cidrs` (votre IP publique en `/32`), `admin_ssh_public_keys`, les deux `snapshot_id` de `firewall.nodes` et vos `departments`. Toutes les options : [docs/CONFIGURATION.md](docs/CONFIGURATION.md).
+
+3. Initialiser, relire le plan, appliquer :
+
+   ```bash
+   terraform init -backend-config="bucket=$STATE_BUCKET"
+   terraform plan
+   terraform apply
+   ```
+
+4. Récupérer les accès d'administration et le mot de passe root (absent si vous fournissez `firewall.root_password_hash`) :
+
+   ```bash
+   terraform output -json access
+   terraform output -raw fw_root_password
+   ```
+
+   Les firewalls redémarrent une fois pour appliquer leur configuration : tant que ce n'est pas fini, le SSH répond `stdio forwarding failed`. Attendez quelques minutes.
+
+5. Vérifier : `terraform output departments` (adresses, projet et groupe IAM de chaque département) et `scw vpc vpc-connector list region=fr-par` (tous les connecteurs doivent être `peered`).
+
+**Tests hors ligne** (aucun appel à Scaleway) :
 
 ```bash
 terraform init -backend=false && terraform test
@@ -103,47 +108,95 @@ terraform -chdir=modules/hub init -backend=false && terraform -chdir=modules/hub
 terraform -chdir=modules/department init -backend=false && terraform -chdir=modules/department test
 ```
 
-Le contenu de chaque fichier du dépôt est décrit dans [ARBORESCENCE.md](ARBORESCENCE.md).
+## Exploitation
 
-## État de validation
+Après chaque modification de `terraform.tfvars` : `terraform plan`, relecture, puis `terraform apply`.
 
-Déploiement testé sur Scaleway (fr-par-1 et fr-par-2) avec Terraform 1.15.5, le provider Scaleway 2.87.0, l'image golden 1.0.8 et deux départements. Les durées sont des mesures, pas des garanties.
+**Ajouter un département.** Ajoutez une entrée dans `departments` avec un `index` unique (0-1023), puis `terraform apply`. Le plan ne doit montrer que les ressources du nouveau département. Ne changez jamais l'`index` d'un département existant.
 
-- **Déploiement.** 89 ressources en un seul `apply` (1 min 45). Les firewalls sont configurés au démarrage et redémarrés 3 min après la fin de l'`apply`. Les 10 connecteurs de peering sont `peered`.
-- **Flux.** Sortie Internet par la Public Gateway A, via le firewall maître. Flux entre départements bloqué par le firewall (visible dans son journal). Une exception `policy` s'ouvre 43 s après l'`apply` et se referme en 12 s.
-- **Départements.** Ajout et retrait sans toucher aux firewalls (18 à 19 ressources, toutes dans le département). Le module attend 90 s après la création d'un projet, car l'API VPC ne le connaît qu'au bout d'environ 70 s.
-- **Bascule.** Dans les deux sens, avec la règle `[OUT]` : CARP en 14 s, VIP déplacées en 16 à 17 s. Les sessions entre départements et vers Internet survivent, sans `state-mismatch` (la session Internet s'est arrêtée 18 s dans un sens). Sans `[OUT]`, une session Internet était perdue dans un sens. Coupure ICMP : 5,6 à 6,2 s, mesurée avant l'ajout de la patte egress à `[OUT]`.
-- **Destruction.** Tout est détruit, rien ne reste, une fois supprimés les security groups « Default » créés par les VM.
-- **VPN.** Testé sur une version antérieure des mêmes modules, avec un site on-prem simulé : 2 tunnels IPsec, 2 sessions BGP, bascule de tunnel en 162 s avec les réglages par défaut.
+```hcl
+departments = {
+  genomic   = { index = 1 }
+  marketing = { index = 2 }
+}
+```
 
-**Non validé en réel :**
-- **Interlink et `hybrid_bypass`** : aucune liaison Interlink n'était disponible.
-- **VPN avec le module racine unique** : le test ci-dessus date d'une version antérieure.
-- **Load Balancer et Edge Services** : ils ne font pas partie de la landing zone ; Edge Services demande un domaine dont on contrôle le DNS.
-- **Régions autres que `fr-par`.**
+Dans la même entrée : `nacl_inbound` ouvre un flux entrant, `hybrid_bypass = true` relie le département à Interlink (demande `interlink`).
+
+**Retirer un département.** Le département vide d'abord son projet (instances, LB, volumes, bases, buckets). Supprimez ensuite son entrée et lancez `terraform apply`. Gardez son `index` réservé tant que le projet n'est pas détruit.
+
+**Changer la politique du firewall.** Modifiez `policy` (format : [docs/CONFIGURATION.md](docs/CONFIGURATION.md#policy)), puis `terraform apply`. Les firewalls la relisent en moins d'une minute, sans redémarrage. Appliquez la politique seule, sans autre changement de plateforme en attente. Un réglage fait dans le WebUI est écrasé au prochain changement.
+
+**Reconstruire un firewall.** Un changement de plateforme (interfaces, CARP, passerelles, syslog) ou la rotation d'un secret demande de reconstruire le nœud. Reconstruisez d'abord le BACKUP, un nœud par `apply` :
+
+```bash
+ssh -J bastion@<ip-pgw>:61000 root@<ip-egress-du-nœud> 'ifconfig vtnet1 | grep carp'   # MASTER ou BACKUP
+terraform apply -replace='module.hub.terraform_data.fw_generation["fw1"]'               # ou "fw2"
+```
+
+Gardez le préfixe `module.hub.`. Pour monter de version l'image, changez le `snapshot_id` d'un seul nœud par `apply`. Reconstruire le maître provoque une bascule : faites-le en fenêtre de maintenance.
+
+**Faire tourner la clé API du hook.** Un nœud lit la clé une seule fois, à sa création.
+
+```bash
+terraform apply -replace='module.hub.scaleway_iam_api_key.fw_failover'
+```
+
+Reconstruisez ensuite fw2, puis fw1 (commande ci-dessus). Si une bascule survient entre les deux, déplacez les VIP à la main avec la ligne du nœud maître :
+
+```bash
+terraform output -json failover_commands
+```
+
+**Détruire.**
+
+```bash
+terraform destroy
+```
+
+Les ressources des départements (instances, LB, volumes, bases, buckets) doivent être supprimées avant. Si l'erreur `resource is still in use` apparaît, supprimez les security groups « Default » créés par Scaleway dans le projet du département, puis relancez :
+
+```bash
+scw instance security-group list zone=fr-par-1 project-id=<id-projet-département>
+scw instance security-group delete <id> zone=fr-par-1
+```
+
+Faites de même dans `fr-par-2` si des VM y ont tourné. Récupérez les `project_id` avec `terraform output departments` avant la destruction.
+
+## Dépannage
+
+| Symptôme | Cause | Action |
+|---|---|---|
+| `stdio forwarding failed` en SSH vers un firewall | il démarre encore | attendre quelques minutes |
+| `Connection timed out during banner exchange` vers une VM | port fermé par la NACL du département | ajouter une règle `nacl_inbound`, puis `apply` |
+| Plus de trafic via le hub ou vers Internet après une bascule | VIP restées sur l'ancien maître | `terraform output -json failover_commands`, lancer la ligne du maître |
+| Le journal du firewall (`grep scwlz /var/log/system/latest.log`) indique `rebuild this node` | changement de plateforme en attente ; le nœud ignore aussi la politique | reconstruire le nœud, le BACKUP d'abord |
+| Le plan refuse `policy` | alias inconnu, description en double ou contenant `<`, `>`, `&`, port sans protocole | corriger `policy` |
+| Le plan refuse les CIDR | chevauchement entre `cidrs`, `dept_supernet` et les CIDR on-prem | corriger les valeurs |
+| `hybrid_bypass needs interlink to be set` | `hybrid_bypass = true` sans `interlink` | définir `interlink` ou repasser à `false` |
+| `each department needs a unique index` | deux départements ont le même `index` | donner un `index` libre (jamais à un département déjà déployé) |
+| `-replace` n'affiche aucun changement | adresse sans préfixe `module.hub.` | utiliser `module.hub.terraform_data.fw_generation["fw1"]` |
+| `resource project with ID ... is not found` à la création d'un département | projet neuf pas encore connu de l'API VPC | relancer `terraform apply` |
+| `resource is still in use` à la destruction | security group « Default » dans le projet du département | voir « Détruire » |
 
 ## Limites connues
 
 - **Produits sans peering.** Redis, MongoDB, Kafka, OpenSearch et ClickHouse ne suivent pas le routage VPC : ils ne sont joignables que depuis leur Private Network.
-- **Exposition directe.** Les chemins Internet créés par un département ne passent pas par le firewall : une IP publique attachée à une instance (`InstancesFullAccess`), un Load Balancer qu'il crée lui-même, des nœuds Kapsule avec IP publique. Le contrôle est IAM et un inventaire par projet de département : `scw instance ip list project-id=<projet du département>` et `scw lb list project-id=<projet du département>` ne doivent montrer que ce que la DSI a validé. Retirer `InstancesFullAccess`, `LoadBalancersFullAccess` ou `KubernetesFullAccess` de `iam_permission_sets` ferme ces voies.
-- **Secrets.** Le state contient le hash root, le mot de passe CARP et la clé API du hook : protégez le bucket. Avant le second boot, ces secrets sont lisibles dans les métadonnées (environ une minute).
-- **Capacité de sortie.** Toute la sortie passe par un firewall (`POP2-2C-8G` par défaut, 0,4 Gbps) et une Public Gateway (`VPC-GW-S` par défaut, 0,1 Gbps) : le plus lent des deux fixe le débit. Le type de PGW se change à chaud (descendre de type a coupé la sortie 20 min lors d'un essai : à faire en fenêtre de maintenance), celui du firewall impose une reconstruction. Une `VPC-GW-L` apporte de la bande passante, pas plus de paquets par seconde qu'une `VPC-GW-M`.
-- **Sessions.** Elles survivent à une bascule de firewall grâce à la règle `[OUT]`, jamais à celle d'une Public Gateway (l'IP publique change).
-- **Bascule par script.** Le déplacement des VIP dépend du plugin et d'une clé `IPAMFullAccess`, limitée au projet DSI et aux IP des Public Gateways. Ces IP ne désignent pas les seuls firewalls : la sortie Internet des départements passe par les mêmes Public Gateways. Une clé fuitée (state, disque d'un firewall) reste donc utilisable depuis n'importe quelle VM de département, pour déplacer ou libérer les VIP de données.
+- **Exposition directe.** Les chemins Internet créés par un département ne passent pas par le firewall : IP publique d'instance (`InstancesFullAccess`), Load Balancer, nœuds Kapsule avec IP publique. Le contrôle passe par IAM et par un inventaire des projets de département (`scw instance ip list project-id=<projet>`, `scw lb list project-id=<projet>`). Retirer `InstancesFullAccess`, `LoadBalancersFullAccess` ou `KubernetesFullAccess` de `iam_permission_sets` ferme ces voies.
+- **Secrets dans le state.** Le state contient le hash root, le mot de passe CARP et la clé API du hook : protégez le bucket. Avant le second démarrage, ces secrets sont lisibles dans les métadonnées de l'instance.
+- **Clé du hook.** La clé `IPAMFullAccess` qui déplace les VIP est limitée au projet DSI et aux IP des Public Gateways. Ces IP sont aussi la sortie Internet des départements : une clé qui fuite reste utilisable depuis n'importe quelle VM de département.
 - **Sloppy state.** Les règles de transit et la règle `[OUT]` sont en *sloppy state* : pf ne vérifie plus les numéros de séquence TCP.
-- **VPN.** Sans réglage sur l'on-prem, BGP met 162 s à basculer d'un tunnel à l'autre (30 s au plus avec les réglages recommandés).
-- **NACL.** Les retours sont ouverts en TCP et UDP sur 32768-65535 depuis toute source : un service qui écoute sur ces ports est joignable de l'extérieur du département (filtré par le firewall s'il vient du Hub, pas par le bypass Interlink). Pas de NACL ni de routes IPv6.
-- **Journaux.** Ils restent locaux sauf si vous branchez `firewall.syslog`.
+- **NACL.** Les retours sont ouverts en TCP et UDP sur 32768-65535 depuis toute source : un service qui écoute sur ces ports est joignable de l'extérieur du département (le firewall filtre ce qui vient du Hub, pas le bypass Interlink). Pas de NACL ni de routes IPv6.
+- **Sessions.** Elles survivent à une bascule de firewall, jamais à la perte d'une Public Gateway (l'IP publique change).
 - **Nouveaux départements.** Les VM déjà démarrées reçoivent les nouvelles routes par DHCP en jusqu'à 1 h.
 - **Quota de peering.** 512 connecteurs par organisation : 127 départements sans bypass, 85 avec.
-- **Un seul state.** Un `plan` regarde la DSI et tous les départements, et un `apply` verrouille le tout. Les firewalls ne sont pas touchés par l'ajout ou le retrait d'un département (le module hub ne dépend pas de la liste des départements), mais relisez le plan.
+- **Un seul state.** Un `plan` regarde la DSI et tous les départements, et un `apply` verrouille le tout. Relisez chaque plan.
+- **Journaux.** Ils restent locaux sauf si vous renseignez `firewall.syslog`.
 
-## Documents
+## Documentation
 
-- [ARBORESCENCE.md](ARBORESCENCE.md) : le rôle de chaque fichier du dépôt.
-- [docs/DEPLOIEMENT.md](docs/DEPLOIEMENT.md) : déployer pas à pas, exploiter, dépanner, détruire.
 - [docs/CONFIGURATION.md](docs/CONFIGURATION.md) : toutes les options.
-- [docs/IMAGE.md](docs/IMAGE.md) : l'image golden et le plugin.
+- [docs/IMAGE.md](docs/IMAGE.md) : l'image OPNsense et le plugin.
 
 ## Licence
 

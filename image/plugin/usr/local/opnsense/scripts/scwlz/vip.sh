@@ -49,8 +49,7 @@ split_brain_log() {
 
 # Hand back. Once a split brain heals, the node that took the VIPs during it
 # turns BACKUP and keeps them, while the MASTER's guard (peer_holds) never takes
-# them from a living peer (seen live: stuck, with a false split brain alarm
-# every minute). So a BACKUP's cron run gives a VIP it still holds to its peer,
+# them from a living peer. So a BACKUP's cron run gives a VIP it still holds to its peer,
 # only while the peer answers on the sync leg (never to a dead one).
 # $1 IP id, $2 own MAC for it, $3 peer MAC for it.
 release() {
@@ -131,8 +130,7 @@ aliases() {
     if [ "$1" = add ] && [ "$held" = 0 ]; then
       ifconfig "${a%=*}" alias "${a#*=}/32" && logger -p daemon.notice -t scwlz-vip "alias ${a#*=} added on ${a%=*}"
       # The PGW may keep the old master's MAC for the VIP in its ARP cache
-      # despite the gratuitous ARP (12 to 36 s of outage seen live); traffic
-      # from the VIP to it made it switch at once (6 s outage end to end).
+      # despite the gratuitous ARP; traffic from the VIP to it makes it switch at once.
       gw=$(route -n get default 2>/dev/null | sed -n 's/.*gateway: //p')
       [ -n "$gw" ] && ping -c 2 -t 3 -S "${a#*=}" "$gw" >/dev/null 2>&1 &
     elif [ "$1" = remove ] && [ "$held" != 0 ]; then
@@ -142,7 +140,7 @@ aliases() {
 }
 
 # OPNsense picks the default route at boot, before dpinger has judged the
-# PGWs, and may leave it on the hub router: no Internet, no API (seen live).
+# PGWs, and may leave it on the hub router: no Internet, no API.
 # Re-evaluate routing whenever the default route is not on the egress leg.
 if ! route -n get default 2>/dev/null | grep -q "interface: $EGRESS_IF"; then
   configctl -d interface routes configure >/dev/null
@@ -151,7 +149,7 @@ fi
 
 # pfsync demotes CARP (+240) until its bulk state transfer completes. When both
 # nodes reload their configuration at once (first boot), the request can be
-# lost and the demotion stays forever (seen live): the node then loses every
+# lost and the demotion stays forever: the node then loses every
 # election. Re-arm pfsync when it is still not in sync on two cron runs.
 if [ "$1" = reconcile ]; then
   stuck=/var/run/scwlz-pfsync-stuck
@@ -185,9 +183,9 @@ BACKUP | INIT)
   fi
   ;;
 MASTER)
-  # A booting node can be MASTER for about a second before it hears its peer
-  # (seen live: it took the VIPs and caused a 1.2 s outage). Act only on a
-  # mastership that holds.
+  # A booting node can be MASTER for about a second before it hears its peer,
+  # and taking the VIPs then would cause an outage. Act only on a mastership
+  # that holds.
   [ "$tries" = 30 ] && { sleep 3; is_master || exit 0; }
   aliases add
   # Detached and parallel: devd must not wait, one VIP must not wait for the
