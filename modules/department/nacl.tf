@@ -1,8 +1,12 @@
 # DSI-imposed Network ACLs (the department group only has VPCReadOnly). NACLs are
 # stateless and default-deny: the department may open any connection outwards, Pub may
-# open any connection to Private, and nothing from outside the department can open a
-# connection inwards unless var.nacl_inbound allows it. Traffic inside
-# a Private Network (e.g. LB -> backends in Pub) is never filtered.
+# open any connection to Private, and from outside the department only
+# var.nacl_inbound and the stateless return rules let traffic in. The return
+# rules accept TCP/UDP from anywhere to ports 32768-65535, so a service
+# listening on an ephemeral port is reachable from outside: what comes through
+# the Hub is still filtered by the firewall; only the Interlink bypass and
+# Pub -> Private are not. Traffic inside a Private Network (e.g. LB -> backends
+# in Pub) is never filtered.
 
 locals {
   any = "0.0.0.0/0"

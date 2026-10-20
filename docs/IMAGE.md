@@ -81,7 +81,7 @@ Les sessions établies avant un changement de politique continuent jusqu'à leur
 
 - **Mot de passe root** : `firewall.root_password_hash` (bcrypt, `htpasswd -nbB root <mot de passe>`), pour qu'aucun mot de passe en clair n'existe. Sans lui, un mot de passe est généré (sortie `fw_root_password`).
 - **Clés SSH admin** : `admin_ssh_public_keys`.
-- **Clé API du hook** : générée par le module. Droit `IPAMFullAccess`, limitée au projet DSI et aux requêtes venant des IP publiques des Public Gateways.
+- **Clé API du hook** : générée par le module. Droit `IPAMFullAccess`, limitée au projet DSI et aux requêtes venant des IP publiques des Public Gateways. La sortie Internet des départements utilise les mêmes IP : la condition écarte une clé fuitée hors de la landing zone, pas depuis une VM de département. `vip.sh` passe la clé à `curl` en argument (`-H "X-Auth-Token: ..."`), donc visible dans la liste des processus le temps de l'appel ; seul root existe sur le firewall, le risque est faible.
 - **Rotation** : un nœud ne lit ses secrets qu'une fois, à sa création. Changer un secret revient à reconstruire les nœuds l'un après l'autre ([DEPLOIEMENT.md](DEPLOIEMENT.md#rotation-de-la-clé-du-hook)). Le mot de passe CARP doit rester identique sur les deux nœuds : pour le changer, reconstruisez les deux en fenêtre de maintenance.
 
 ## Journal du plugin

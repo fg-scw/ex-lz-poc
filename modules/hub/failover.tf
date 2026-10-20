@@ -11,8 +11,11 @@ resource "scaleway_iam_application" "fw_failover" {
 
 # IPAM has no resource-level IAM conditions: the key is limited to the DSI
 # project and to requests leaving through the egress Public Gateways
-# (request.ip only sees public IPs), so a key leaked from the state or a
-# firewall disk is useless from anywhere else.
+# (request.ip only sees public IPs). That does not pin the key to the
+# firewalls: department Internet traffic leaves through the same gateways
+# (firewall SNAT, then PGW masquerade), so a key leaked from the state or a
+# firewall disk also works from any department VM. It is useless from
+# anywhere else.
 resource "scaleway_iam_policy" "fw_failover" {
   name           = "${var.name}-fw-failover"
   application_id = scaleway_iam_application.fw_failover.id

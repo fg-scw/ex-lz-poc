@@ -150,7 +150,7 @@ departments = {
 | `hybrid_bypass` | `false` | relie le VPC Private au VPC Hybrid (Interlink, sans firewall). **Exige `interlink`** : sans lui, le plan échoue. Coûte 2 connecteurs de peering de plus |
 | `nacl_inbound` | `[]` | flux autorisés **vers** le département depuis l'extérieur (on-prem, DSI, autre département) |
 
-Deux `index` identiques font échouer le plan. Les NACL du département refusent tout trafic entrant qui n'est pas déclaré. Un élément de `nacl_inbound` a les champs :
+Deux `index` identiques font échouer le plan. Les NACL du département refusent tout trafic entrant qui n'est pas déclaré, sauf vers la plage de retour : sans état, elles acceptent TCP et UDP depuis n'importe quelle source vers les ports 32768-65535. Un service qui écoute sur un de ces ports est donc joignable de l'extérieur du département. Ce qui vient du Hub (autre département, on-prem par VPN, DSI) reste filtré par le firewall ; seuls le bypass Interlink et le trafic Pub → Private du département ne le sont pas. Un élément de `nacl_inbound` a les champs :
 
 | Champ | Défaut | Valeurs |
 |---|---|---|

@@ -14,7 +14,6 @@ Ce document décrit chaque fichier du dépôt : son rôle, les ressources Terraf
 ├── .gitignore                       fichiers exclus (secrets, state, caches)
 ├── README.md                        point d'entrée
 ├── ARBORESCENCE.md                  ce document
-├── LICENSE                          licence Apache 2.0
 ├── tests/
 │   └── landing-zone.tftest.hcl      test du module racine
 ├── modules/

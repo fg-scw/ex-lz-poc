@@ -25,7 +25,7 @@ variable "hybrid_bypass" {
 }
 
 variable "nacl_inbound" {
-  description = "Flows allowed INTO the department from outside it (on-prem, DSI, other departments once the firewall allows them). Everything else is dropped by the department NACL."
+  description = "Flows allowed INTO the department from outside it (on-prem, DSI, other departments once the firewall allows them). The department NACL drops everything else, except the stateless return range (TCP/UDP 32768-65535 from anywhere, nacl.tf)."
   type = list(object({
     to          = string # pub | private
     source      = string

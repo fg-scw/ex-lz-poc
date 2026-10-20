@@ -129,10 +129,10 @@ Déploiement testé sur Scaleway (fr-par-1 et fr-par-2) avec Terraform 1.15.5, l
 - **Secrets.** Le state contient le hash root, le mot de passe CARP et la clé API du hook : protégez le bucket. Avant le second boot, ces secrets sont lisibles dans les métadonnées (environ une minute).
 - **Capacité de sortie.** Toute la sortie passe par un firewall (`POP2-2C-8G` par défaut, 0,4 Gbps) et une Public Gateway (`VPC-GW-S` par défaut, 0,1 Gbps) : le plus lent des deux fixe le débit. Le type de PGW se change à chaud (descendre de type a coupé la sortie 20 min lors d'un essai : à faire en fenêtre de maintenance), celui du firewall impose une reconstruction. Une `VPC-GW-L` apporte de la bande passante, pas plus de paquets par seconde qu'une `VPC-GW-M`.
 - **Sessions.** Elles survivent à une bascule de firewall grâce à la règle `[OUT]`, jamais à celle d'une Public Gateway (l'IP publique change).
-- **Bascule par script.** Le déplacement des VIP dépend du plugin et d'une clé `IPAMFullAccess` (limitée au projet DSI et aux IP des Public Gateways).
+- **Bascule par script.** Le déplacement des VIP dépend du plugin et d'une clé `IPAMFullAccess`, limitée au projet DSI et aux IP des Public Gateways. Ces IP ne désignent pas les seuls firewalls : la sortie Internet des départements passe par les mêmes Public Gateways. Une clé fuitée (state, disque d'un firewall) reste donc utilisable depuis n'importe quelle VM de département, pour déplacer ou libérer les VIP de données.
 - **Sloppy state.** Les règles de transit et la règle `[OUT]` sont en *sloppy state* : pf ne vérifie plus les numéros de séquence TCP.
 - **VPN.** Sans réglage sur l'on-prem, BGP met 162 s à basculer d'un tunnel à l'autre (30 s au plus avec les réglages recommandés).
-- **NACL.** Les retours sont ouverts sur 32768-65535. Pas de NACL ni de routes IPv6.
+- **NACL.** Les retours sont ouverts en TCP et UDP sur 32768-65535 depuis toute source : un service qui écoute sur ces ports est joignable de l'extérieur du département (filtré par le firewall s'il vient du Hub, pas par le bypass Interlink). Pas de NACL ni de routes IPv6.
 - **Journaux.** Ils restent locaux sauf si vous branchez `firewall.syslog`.
 - **Nouveaux départements.** Les VM déjà démarrées reçoivent les nouvelles routes par DHCP en jusqu'à 1 h.
 - **Quota de peering.** 512 connecteurs par organisation : 127 départements sans bypass, 85 avec.
@@ -144,7 +144,3 @@ Déploiement testé sur Scaleway (fr-par-1 et fr-par-2) avec Terraform 1.15.5, l
 - [docs/DEPLOIEMENT.md](docs/DEPLOIEMENT.md) : déployer pas à pas, exploiter, dépanner, détruire.
 - [docs/CONFIGURATION.md](docs/CONFIGURATION.md) : toutes les options.
 - [docs/IMAGE.md](docs/IMAGE.md) : l'image golden et le plugin.
-
-## Licence
-
-Apache License 2.0 : voir [LICENSE](LICENSE).

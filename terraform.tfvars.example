@@ -46,7 +46,8 @@ firewall = {
 #                  peering connectors.
 # nacl_inbound     flows allowed INTO the department from outside it (on-prem, DSI
 #                  LB, other departments once the firewall allows them). The
-#                  department NACLs drop every other inbound connection.
+#                  department NACLs drop every other inbound connection,
+#                  except to the return range (TCP/UDP 32768-65535, open to all).
 #                  { to: "pub"|"private", source: CIDR, protocol: ANY|TCP|UDP|ICMP,
 #                    port: 0 = all, port_end: optional range end, description }
 departments = {
