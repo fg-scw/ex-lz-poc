@@ -1,8 +1,9 @@
 # One department: its own project, a Pub VPC peered to the DSI hub and a
-# Private VPC behind it. Every flow leaving the department is inspected by the central
-# firewall; Private may bypass it only towards on-prem over Interlink.
+# Private VPC behind it. Every flow leaving the department goes through the hub to the
+# on-prem link (and the on-prem firewalls); Private may also reach on-prem
+# directly over Interlink (hybrid_bypass).
 #
-#   Private --peering--> Pub (transitive) --peering--> Hub (ingress rule -> hub data VIP)
+#   Private --peering--> Pub (transitive) --peering--> Hub (transit to the on-prem link)
 #   Private --peering--> Hybrid (Interlink, bypass)            [hybrid_bypass]
 #
 # Network ACLs imposed on both VPCs live in nacl.tf.
@@ -114,12 +115,12 @@ resource "scaleway_vpc_connector" "hybrid_to_private" {
 }
 
 # --- Routes -----------------------------------------------------------------
-# The hub needs no per-department ingress rule: the DSI rule on the department supernet already
-# sends every department source to the hub data VIP (active firewall).
+# The hub has a default route to the on-prem link; it only needs a return route
+# per department (hub_return).
 
 resource "scaleway_vpc_route" "pub_default" {
   vpc_id                   = scaleway_vpc.pub.id
-  description              = "${local.prefix}: default -> hub firewall"
+  description              = "${local.prefix}: default -> hub"
   destination              = "0.0.0.0/0"
   nexthop_vpc_connector_id = scaleway_vpc_connector.pub_to_hub.id
   tags                     = local.tags
@@ -135,7 +136,7 @@ resource "scaleway_vpc_route" "pub_to_private" {
 
 resource "scaleway_vpc_route" "private_default" {
   vpc_id                   = scaleway_vpc.private.id
-  description              = "${local.prefix}: default -> pub -> hub firewall"
+  description              = "${local.prefix}: default -> pub -> hub"
   destination              = "0.0.0.0/0"
   nexthop_vpc_connector_id = scaleway_vpc_connector.private_to_pub.id
   tags                     = local.tags

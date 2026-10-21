@@ -1,15 +1,15 @@
-# On-prem connectivity.
-# - S2S VPN (Egress VPC, one gateway per zone): inspected. Routes reach the hub through the
-#   egress->hub peering and the hub ingress rules send them to the firewall.
-# - Interlink (Hybrid VPC): bypass. Departments opting in (hybrid_bypass) peer their
-#   Private VPC with Hybrid; the department module creates those connectors and routes.
+# On-prem connectivity. Both links are optional, at least one is required.
+# - S2S VPN (Egress VPC, one gateway per zone).
+# - Interlink (Hybrid VPC). It carries the department traffic when set;
+#   otherwise the VPN does. Departments with hybrid_bypass also peer their
+#   Private VPC with Hybrid (department module).
+# The on-prem side must announce 0.0.0.0/0 on the link that carries the
+# department traffic: that is the Internet exit of the landing zone.
 
-# One VPN gateway per firewall zone (same zones as the Public Gateways), each
-# with its own tunnel and BGP session: on-prem keeps a path if a zone is lost.
 locals {
   vpn_gateways = var.vpn == null ? {} : {
-    a = { zone = local.pgw.a.zone, bgp_scaleway = var.vpn.bgp_links.a.scaleway, bgp_onprem = var.vpn.bgp_links.a.onprem }
-    b = { zone = local.pgw.b.zone, bgp_scaleway = var.vpn.bgp_links.b.scaleway, bgp_onprem = var.vpn.bgp_links.b.onprem }
+    a = { zone = var.vpn.zones.a, bgp_scaleway = var.vpn.bgp_links.a.scaleway, bgp_onprem = var.vpn.bgp_links.a.onprem }
+    b = { zone = var.vpn.zones.b, bgp_scaleway = var.vpn.bgp_links.b.scaleway, bgp_onprem = var.vpn.bgp_links.b.onprem }
   }
 }
 
@@ -22,10 +22,6 @@ resource "scaleway_s2s_vpn_gateway" "this" {
   private_network_id = scaleway_vpc_private_network.this["egress"].id
   zone               = each.value.zone
   tags               = var.tags
-
-  # Its private IP is auto-allocated: reserve every fixed egress address
-  # (data VIP, Public Gateways, firewalls) first, or it could take one of them.
-  depends_on = [scaleway_ipam_ip.data_vip, scaleway_ipam_ip.egress_pgw, scaleway_ipam_ip.fw]
 }
 
 data "scaleway_ipam_ip" "vpn_gateway" {
@@ -49,8 +45,8 @@ resource "scaleway_s2s_vpn_routing_policy" "this" {
   name              = "${var.name}-vpn"
   project_id        = local.project_id
   is_ipv6           = false
-  prefix_filter_in  = var.vpn.onprem_cidrs
-  prefix_filter_out = [var.dept_supernet, var.cidrs.egress]
+  prefix_filter_in  = concat(["0.0.0.0/0"], var.vpn.onprem_cidrs)
+  prefix_filter_out = local.interlink_is_path ? [var.cidrs.egress] : [var.dept_supernet, var.cidrs.egress]
   tags              = var.tags
 }
 
@@ -91,8 +87,8 @@ resource "scaleway_interlink_routing_policy" "this" {
   name              = "${var.name}-interlink"
   project_id        = local.project_id
   is_ipv6           = false
-  prefix_filter_in  = var.interlink.onprem_cidrs
-  prefix_filter_out = [local.department_pools.private, var.cidrs.hybrid]
+  prefix_filter_in  = concat(["0.0.0.0/0"], var.interlink.onprem_cidrs)
+  prefix_filter_out = [var.dept_supernet, var.cidrs.hybrid]
   tags              = var.tags
 }
 

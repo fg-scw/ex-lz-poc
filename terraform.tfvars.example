@@ -1,30 +1,21 @@
 # Copy to terraform.tfvars (not committed) and adapt.
 
-# --- Hub (DSI) ------------------------------------------------------------------
+# --- On-prem links ---------------------------------------------------------------
+# Department traffic (Internet and on-prem) leaves through the on-prem
+# firewalls. At least one link is required. The link carrying the traffic is
+# the Interlink when set, otherwise the VPN. On-prem MUST announce 0.0.0.0/0 on
+# that link (Internet exit), and the on-prem firewalls must allow dept_supernet
+# (10.64.0.0/10 by default).
 
-# Public IPs allowed on the Public Gateway SSH bastion.
-admin_cidrs           = ["203.0.113.10/32"]
-admin_ssh_public_keys = ["ssh-ed25519 AAAA_REPLACE_ME admin@dsi"]
-
-# Golden image snapshot of each zone (docs/IMAGE.md), or a zone-local image ID
-# or an SBS volume "<zone>/<uuid>". The node zones also set the zones of the
-# Public Gateways and VPN gateways.
-firewall = {
-  instance_type = "POP2-2C-8G"
-  nodes = {
-    fw1 = { zone = "fr-par-1", snapshot_id = "fr-par-1/<uuid of the golden snapshot>" }
-    fw2 = { zone = "fr-par-2", snapshot_id = "fr-par-2/<uuid of the golden snapshot>" }
-  }
+# S2S VPN (Egress VPC): the starting point. One tunnel per zone (a: fr-par-1, b: fr-par-2).
+vpn = {
+  customer_gateway_ip = "198.51.100.1"
+  customer_asn        = 65010
+  onprem_cidrs        = ["192.168.0.0/16"]
+  # zones = { a = "fr-par-1", b = "fr-par-2" }
 }
 
-# Inspected on-prem access (Egress VPC). Uncomment to enable.
-# vpn = {
-#   customer_gateway_ip = "198.51.100.1"
-#   customer_asn        = 65010
-#   onprem_cidrs        = ["192.168.0.0/16"]
-# }
-
-# Uninspected on-prem access for department Private VPCs (Hybrid VPC). Uncomment to enable.
+# Interlink (Hybrid VPC): add it to move the department traffic off the VPN.
 # interlink = {
 #   pop_id         = "fr-par/<pop-uuid>"
 #   bandwidth_mbps = 1000
@@ -42,12 +33,13 @@ firewall = {
 #                  Never renumber a live department; keep the index of a
 #                  destroyed department reserved until its project is fully gone.
 # hybrid_bypass    peer the department Private VPC with the Hybrid VPC (Interlink,
-#                  no firewall inspection). Needs interlink above. Costs 2 extra
+#                  direct to on-prem). Needs interlink above. Costs 2 extra
 #                  peering connectors.
-# nacl_inbound     flows allowed INTO the department from outside it (on-prem, DSI
-#                  LB, other departments once the firewall allows them). The
-#                  department NACLs drop every other inbound connection,
-#                  except to the return range (TCP/UDP 32768-65535, open to all).
+# nacl_inbound     flows allowed INTO the department from outside it (on-prem,
+#                  DSI). Another department as source has no effect: the Hub ACL
+#                  drops that traffic. The department NACLs drop every other
+#                  inbound connection, except to the return range (TCP/UDP
+#                  32768-65535, open to all).
 #                  { to: "pub"|"private", source: CIDR, protocol: ANY|TCP|UDP|ICMP,
 #                    port: 0 = all, port_end: optional range end, description }
 departments = {
@@ -57,50 +49,10 @@ departments = {
     nacl_inbound = [
       {
         to          = "private"
-        source      = "10.0.4.0/24" # DSI Egress (LB / Edge Services of the DSI)
+        source      = "192.168.10.0/24" # on-prem CIDR (inside vpn.onprem_cidrs)
         port        = 8080
-        description = "DSI load balancers to genomic backends"
+        description = "On-prem clients to genomic backends"
       },
     ]
   }
 }
-
-# --- Firewall policy (optional) -------------------------------------------------
-# Extends the firewall policy. Policy changes are pulled live by the firewalls
-# within a minute, no rebuild.
-#
-# Ordering: rules are evaluated top-down, first match wins (quick rules). Your
-# rules are rendered BEFORE the default ones ([EW] inter-department block, [DSI],
-# [VPN], [EGRESS]), so an exception to the inter-department block works as is.
-# Rule descriptions must be unique and free of <, > and &.
-#
-# aliases: name => CIDRs. Built-in aliases usable in rules: DEPT_NETS,
-# DSI_EGRESS_NET, ONPREM_VPN, EGRESS_PGWS, internal_nets.
-#
-# rules: action pass|block, interface hub (default)|egress, protocol
-# any|tcp|udp|icmp, state sloppy (default)|keep, optional port / port_end
-# (tcp and udp only). source / destination: alias, CIDR or any.
-#
-# nat_outbound: SNAT on the egress interface; target defaults to the egress
-# data VIP.
-#
-# policy = {
-#   aliases = {
-#     DEPT_GENOMIC = ["10.96.8.0/21"]  # Private of the department with index 1
-#     DEPT_HR      = ["10.96.16.0/21"] # Private of the department with index 2
-#     # (a department's CIDRs: terraform output departments)
-#   }
-#   rules = [
-#     {
-#       description = "Genomic reaches HR over HTTPS"
-#       action      = "pass"
-#       source      = "DEPT_GENOMIC"
-#       destination = "DEPT_HR"
-#       protocol    = "tcp"
-#       port        = 443
-#     },
-#   ]
-#   nat_outbound = [
-#     { description = "Genomic SNAT to the Internet", source = "DEPT_GENOMIC" },
-#   ]
-# }

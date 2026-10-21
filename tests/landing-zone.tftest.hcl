@@ -1,4 +1,4 @@
-# terraform test - offline, plan only (the hub has local-exec provisioners that must never run).
+# terraform test - offline, plan only, no Scaleway API call.
 mock_provider "scaleway" {
   # The provider validates ID formats, so mocks need realistic IDs.
   mock_resource "scaleway_account_project" {
@@ -10,9 +10,6 @@ mock_provider "scaleway" {
   mock_resource "scaleway_vpc_private_network" {
     defaults = { id = "fr-par/44444444-4444-4444-4444-444444444444" }
   }
-  mock_resource "scaleway_ipam_ip" {
-    defaults = { id = "fr-par/44444444-4444-4444-4444-444444444444" }
-  }
   mock_resource "scaleway_vpc_connector" {
     defaults = { id = "fr-par/44444444-4444-4444-4444-444444444444" }
   }
@@ -22,15 +19,6 @@ mock_provider "scaleway" {
   mock_resource "scaleway_s2s_vpn_routing_policy" {
     defaults = { id = "fr-par/44444444-4444-4444-4444-444444444444" }
   }
-  mock_resource "scaleway_instance_server" {
-    defaults = { id = "fr-par-1/44444444-4444-4444-4444-444444444444" }
-  }
-  mock_resource "scaleway_vpc_public_gateway" {
-    defaults = { id = "fr-par-1/44444444-4444-4444-4444-444444444444" }
-  }
-  mock_resource "scaleway_vpc_public_gateway_ip" {
-    defaults = { id = "fr-par-1/44444444-4444-4444-4444-444444444444" }
-  }
   mock_resource "scaleway_s2s_vpn_gateway" {
     defaults = { id = "fr-par-1/44444444-4444-4444-4444-444444444444" }
   }
@@ -39,29 +27,7 @@ mock_provider "scaleway" {
   }
 }
 
-mock_provider "random" {
-  override_during = plan
-  mock_resource "random_password" {
-    defaults = { result = "test-password", bcrypt_hash = "$2a$10$test" }
-  }
-}
-
-# The failover API key ends up in opnsense_secrets: known at plan time here.
-override_resource {
-  target          = module.hub.scaleway_iam_api_key.fw_failover
-  override_during = plan
-  values          = { secret_key = "11111111-1111-1111-1111-111111111111" }
-}
-
 variables {
-  admin_cidrs           = ["203.0.113.10/32"]
-  admin_ssh_public_keys = ["ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAITest admin"]
-  firewall = {
-    nodes = {
-      fw1 = { zone = "fr-par-1", image = "opnsense-central-fw" }
-      fw2 = { zone = "fr-par-2", image = "opnsense-central-fw" }
-    }
-  }
   interlink = {
     pop_id         = "fr-par/66666666-6666-6666-6666-666666666666"
     bandwidth_mbps = 1000
@@ -100,6 +66,25 @@ run "departments_and_bypass" {
   }
 }
 
+run "vpn_only" {
+  command = plan
+
+  variables {
+    interlink = null
+    vpn = {
+      customer_gateway_ip = "198.51.100.1"
+      customer_asn        = 65010
+      onprem_cidrs        = ["192.168.0.0/16"]
+    }
+    departments = { genomic = { index = 0 } }
+  }
+
+  assert {
+    condition     = output.vpn != null && output.interlink == null
+    error_message = "A VPN alone is a valid configuration."
+  }
+}
+
 run "duplicate_index_rejected" {
   command = plan
 
@@ -118,6 +103,11 @@ run "bypass_without_interlink_rejected" {
 
   variables {
     interlink = null
+    vpn = {
+      customer_gateway_ip = "198.51.100.1"
+      customer_asn        = 65010
+      onprem_cidrs        = ["192.168.0.0/16"]
+    }
   }
 
   expect_failures = [var.departments]

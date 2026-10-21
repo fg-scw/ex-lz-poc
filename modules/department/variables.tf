@@ -19,13 +19,13 @@ variable "index" {
 }
 
 variable "hybrid_bypass" {
-  description = "Peer the Private VPC with the Hybrid VPC (Interlink, no firewall inspection). Needs an Interlink on the hub."
+  description = "Peer the Private VPC with the Hybrid VPC (Interlink, direct to on-prem). Needs an Interlink on the hub."
   type        = bool
   default     = false
 }
 
 variable "nacl_inbound" {
-  description = "Flows allowed INTO the department from outside it (on-prem, DSI, other departments once the firewall allows them). The department NACL drops everything else, except the stateless return range (TCP/UDP 32768-65535 from anywhere, nacl.tf)."
+  description = "Flows allowed INTO the department from outside it (on-prem, DSI). Another department as source has no effect: the Hub ACL drops that traffic. The department NACL drops everything else, except the stateless return range (TCP/UDP 32768-65535 from anywhere, nacl.tf)."
   type = list(object({
     to          = string # pub | private
     source      = string

@@ -1,8 +1,0 @@
-name: os-scw-lz
-origin: opnsense/os-scw-lz
-version: "%%VERSION%%"
-comment: "Scaleway landing zone: metadata configuration and data VIP failover"
-desc: "Pulls the node configuration (secrets, policy) from the Scaleway instance metadata and moves the IPAM data VIPs to the CARP master."
-maintainer: "https://github.com/fg-scw/ex-lz-poc/issues"
-www: "https://github.com/fg-scw/ex-lz-poc"
-prefix: /

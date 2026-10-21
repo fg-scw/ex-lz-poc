@@ -3,10 +3,12 @@
 # open any connection to Private, and from outside the department only
 # var.nacl_inbound and the stateless return rules let traffic in. The return
 # rules accept TCP/UDP from anywhere to ports 32768-65535, so a service
-# listening on an ephemeral port is reachable from outside: what comes through
-# the Hub is still filtered by the firewall; only the Interlink bypass and
-# Pub -> Private are not. Traffic inside a Private Network (e.g. LB -> backends
-# in Pub) is never filtered.
+# listening on an ephemeral port is reachable from outside the department.
+# Another department is blocked by a drop rule in the Hub VPC ACL (hub/network.tf,
+# both directions, all ports), so a nacl_inbound naming a department as source has
+# no effect. Traffic from on-prem is also filtered by the on-prem
+# firewalls, except through the Interlink bypass. Traffic inside a Private
+# Network (e.g. LB -> backends in Pub) is never filtered.
 
 locals {
   any = "0.0.0.0/0"

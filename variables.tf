@@ -1,37 +1,16 @@
 # Typed and validated by modules/hub: "any" only forwards the values, and null
 # means "module default".
 
-variable "admin_cidrs" {
-  description = "Public IPs allowed on the Public Gateway SSH bastion."
-  type        = list(string)
-}
-
-variable "admin_ssh_public_keys" {
-  description = "OpenSSH public keys of the bastion and of the firewalls' root account."
-  type        = list(string)
-}
-
-variable "firewall" {
-  description = "Golden image snapshot of each zone, instance type, syslog... (modules/hub, docs/CONFIGURATION.md)."
-  type        = any
-}
-
 variable "vpn" {
-  description = "Inspected on-prem access (Egress VPC). null = none."
+  description = "S2S VPN to the on-prem firewalls (Egress VPC). Carries the department traffic when there is no interlink. At least one of vpn and interlink is required."
   type        = any
   default     = null
 }
 
 variable "interlink" {
-  description = "Uninspected on-prem access for department Private VPCs (Hybrid VPC). null = none."
+  description = "Interlink to the on-prem firewalls (Hybrid VPC). Carries the department traffic when set. At least one of vpn and interlink is required."
   type        = any
   default     = null
-}
-
-variable "policy" {
-  description = "Custom firewall policy: aliases, rules, nat_outbound (see terraform.tfvars.example)."
-  type        = any
-  default     = {}
 }
 
 variable "departments" {
@@ -89,19 +68,13 @@ variable "tags" {
 }
 
 variable "cidrs" {
-  description = "Egress, sync, hub and hybrid CIDRs; null = module default."
+  description = "Egress, hub and hybrid CIDRs; null = module default."
   type        = any
   default     = null
 }
 
 variable "dept_supernet" {
   description = "Block holding every department; null = module default."
-  type        = any
-  default     = null
-}
-
-variable "egress" {
-  description = "Public Gateway settings; null = module default."
   type        = any
   default     = null
 }

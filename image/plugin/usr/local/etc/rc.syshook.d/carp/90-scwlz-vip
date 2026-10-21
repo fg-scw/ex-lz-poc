@@ -1,3 +1,0 @@
-#!/bin/sh
-# Move the data VIPs when this node changes CARP state ($1 = vhid@if, $2 = state).
-exec /usr/local/opnsense/scripts/scwlz/vip.sh "$@"

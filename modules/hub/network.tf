@@ -1,5 +1,16 @@
-# DSI project: Egress (Internet, VPN, DSI services), HA (firewall sync),
-# Hub (ingress rules -> firewall VIP) and Hybrid (Interlink, uninspected).
+# DSI project: Egress (S2S VPN), Hub (transit between the departments and the
+# on-prem link) and Hybrid (Interlink). There is no firewall in the hub: every
+# flow leaving a department goes Private -> Pub -> Hub -> on-prem link, and the
+# on-prem firewalls inspect it.
+#
+# Where a firewall plugs in later (README, "Ajouter un firewall dans le hub"):
+#   - an HA VPC (CIDR for the node sync) and a firewall NIC in the Hub and in
+#     the Egress VPC;
+#   - scaleway_vpc_ingress_rule on the Hub VPC, from var.dept_supernet and the
+#     on-prem CIDRs, with the firewall VIP as next hop. Those rules replace the
+#     0.0.0.0/0 route of the Hub VPC below;
+#   - Public Gateways in the Egress VPC for the Internet exit.
+# The department module and the department states do not change.
 
 locals {
   department_pools = {
@@ -7,27 +18,17 @@ locals {
     private = cidrsubnet(var.dept_supernet, 1, 1)
   }
 
-  vpn_cidrs       = var.vpn == null ? [] : var.vpn.onprem_cidrs
   interlink_cidrs = var.interlink == null ? [] : var.interlink.onprem_cidrs
+
+  # The link carrying the department traffic: Interlink when set, else VPN.
+  # Only this link announces dept_supernet to on-prem, so the return traffic
+  # comes back through the same stateful on-prem firewall.
+  interlink_is_path = var.interlink != null
 
   project_id = coalesce(var.project_id, one(scaleway_account_project.this[*].id))
 
-  # Next hop of the firewall routes towards the hub VPC router. On Scaleway
-  # Private Networks the VPC router answers on 169.254.169.254 (on-link), not on
-  # the first host of the subnet.
-  hub_vrouter_ip = "169.254.169.254"
-
-  # One Public Gateway per firewall zone. Both firewalls prefer pgw "a" (fw1
-  # zone) so a firewall failover keeps the same PGW NAT state; "b" takes over
-  # only when "a" stops answering (OPNsense gateway switching).
-  pgw = {
-    a = { zone = var.firewall.nodes.fw1.zone, ip = cidrhost(var.cidrs.egress, var.egress.pgw_hosts.a) }
-    b = { zone = var.firewall.nodes.fw2.zone, ip = cidrhost(var.cidrs.egress, var.egress.pgw_hosts.b) }
-  }
-
   vpcs = {
     egress = var.cidrs.egress
-    ha     = var.cidrs.sync
     hub    = var.cidrs.hub
     hybrid = var.cidrs.hybrid
   }
@@ -37,7 +38,7 @@ resource "scaleway_account_project" "this" {
   count = var.project_id == null ? 1 : 0
 
   name        = var.name
-  description = "Landing zone DSI: central firewall, egress and hybrid connectivity"
+  description = "Landing zone DSI: hub and on-prem connectivity"
 }
 
 resource "scaleway_vpc" "this" {
@@ -47,7 +48,10 @@ resource "scaleway_vpc" "this" {
   project_id                       = local.project_id
   enable_routing                   = true
   enable_custom_routes_propagation = true
-  tags                             = var.tags
+  # Hub only: traffic from a department peer must transit the Hub to reach the
+  # Egress or Hybrid peer. Immutable.
+  enable_transitivity = each.key == "hub"
+  tags                = var.tags
 }
 
 resource "scaleway_vpc_private_network" "this" {
@@ -61,69 +65,7 @@ resource "scaleway_vpc_private_network" "this" {
   ipv4_subnet { subnet = each.value }
 }
 
-# --- Egress Public Gateways: Internet exit and admin SSH bastion, one per zone
-
-resource "scaleway_iam_ssh_key" "admin" {
-  for_each = toset(var.admin_ssh_public_keys)
-
-  name       = "${var.name}-admin-${substr(sha256(each.value), 0, 8)}"
-  project_id = local.project_id
-  public_key = trimspace(each.value)
-}
-
-resource "scaleway_vpc_public_gateway_ip" "egress" {
-  for_each = local.pgw
-
-  project_id = local.project_id
-  zone       = each.value.zone
-}
-
-resource "scaleway_vpc_public_gateway" "egress" {
-  for_each = local.pgw
-
-  name              = "${var.name}-pgw-${each.key}"
-  project_id        = local.project_id
-  type              = var.egress.gateway_type
-  zone              = each.value.zone
-  ip_id             = scaleway_vpc_public_gateway_ip.egress[each.key].id
-  bastion_enabled   = true
-  allowed_ip_ranges = var.admin_cidrs
-  refresh_ssh_keys  = join(",", sort([for k in scaleway_iam_ssh_key.admin : k.id]))
-  tags              = var.tags
-}
-
-resource "scaleway_ipam_ip" "egress_pgw" {
-  for_each = local.pgw
-
-  project_id = local.project_id
-  address    = each.value.ip
-  source { private_network_id = scaleway_vpc_private_network.this["egress"].id }
-}
-
-resource "scaleway_vpc_gateway_network" "egress" {
-  for_each = local.pgw
-
-  gateway_id         = scaleway_vpc_public_gateway.egress[each.key].id
-  private_network_id = scaleway_vpc_private_network.this["egress"].id
-  enable_masquerade  = true
-  zone               = each.value.zone
-
-  ipam_config {
-    push_default_route = true
-    ipam_ip_id         = scaleway_ipam_ip.egress_pgw[each.key].id
-  }
-}
-
-locals {
-  # fw1 sits in the zone of pgw "a", fw2 in the zone of pgw "b".
-  fw_pgw = { fw1 = "a", fw2 = "b" }
-  bastion = {
-    for k, p in local.fw_pgw : k =>
-    "bastion@${scaleway_vpc_public_gateway_ip.egress[p].address}:${scaleway_vpc_public_gateway.egress[p].bastion_port}"
-  }
-}
-
-# --- Egress <-> Hub peering: on-prem (VPN) and DSI services reach the departments ---
+# --- Egress <-> Hub peering (VPN path) ---------------------------------------
 
 resource "scaleway_vpc_connector" "egress_to_hub" {
   name          = "${var.name}-egress-to-hub"
@@ -139,35 +81,77 @@ resource "scaleway_vpc_connector" "hub_to_egress" {
   tags          = var.tags
 }
 
+# --- Hybrid <-> Hub peering (Interlink path) ---------------------------------
+
+resource "scaleway_vpc_connector" "hybrid_to_hub" {
+  count = local.interlink_is_path ? 1 : 0
+
+  name          = "${var.name}-hybrid-to-hub"
+  vpc_id        = scaleway_vpc.this["hybrid"].id
+  target_vpc_id = scaleway_vpc.this["hub"].id
+  tags          = var.tags
+}
+
+resource "scaleway_vpc_connector" "hub_to_hybrid" {
+  count = local.interlink_is_path ? 1 : 0
+
+  name          = "${var.name}-hub-to-hybrid"
+  vpc_id        = scaleway_vpc.this["hub"].id
+  target_vpc_id = scaleway_vpc.this["hybrid"].id
+  tags          = var.tags
+}
+
+# --- Routes ------------------------------------------------------------------
+# Hub: everything not local (Internet and on-prem) goes to the VPC of the
+# on-prem path, which learns 0.0.0.0/0 and the on-prem CIDRs over BGP. The
+# department routes (hub_return) are added by the department module.
+resource "scaleway_vpc_route" "hub_default" {
+  vpc_id                   = scaleway_vpc.this["hub"].id
+  description              = "${var.name}: default -> on-prem path (${local.interlink_is_path ? "interlink" : "vpn"})"
+  destination              = "0.0.0.0/0"
+  nexthop_vpc_connector_id = local.interlink_is_path ? scaleway_vpc_connector.hub_to_hybrid[0].id : scaleway_vpc_connector.hub_to_egress.id
+  tags                     = var.tags
+}
+
+# Egress: the return traffic from on-prem to the departments.
 resource "scaleway_vpc_route" "egress_to_departments" {
   vpc_id                   = scaleway_vpc.this["egress"].id
-  description              = "${var.name}: department supernet -> hub firewall"
+  description              = "${var.name}: department supernet -> hub"
   destination              = var.dept_supernet
   nexthop_vpc_connector_id = scaleway_vpc_connector.egress_to_hub.id
   tags                     = var.tags
 }
 
-resource "scaleway_vpc_route" "hub_to_egress" {
-  for_each = toset(concat([var.cidrs.egress], local.vpn_cidrs))
+# Hybrid: same, only with an Interlink (it is then the on-prem path).
+resource "scaleway_vpc_route" "hybrid_to_departments" {
+  count = local.interlink_is_path ? 1 : 0
 
-  vpc_id                   = scaleway_vpc.this["hub"].id
-  description              = "${var.name}: ${each.value} via egress"
-  destination              = each.value
-  nexthop_vpc_connector_id = scaleway_vpc_connector.hub_to_egress.id
+  vpc_id                   = scaleway_vpc.this["hybrid"].id
+  description              = "${var.name}: department supernet -> hub"
+  destination              = var.dept_supernet
+  nexthop_vpc_connector_id = scaleway_vpc_connector.hybrid_to_hub[0].id
   tags                     = var.tags
 }
 
-# Every packet entering the hub from a peer goes to the active firewall first.
-# The department supernet rule covers all present and future departments. The next hop is the
-# hub data VIP: an IPAM reservation on the real NIC MAC of the CARP master,
-# moved by the failover hook, so the rules themselves never change.
-resource "scaleway_vpc_ingress_rule" "to_firewall" {
-  for_each = toset(concat([var.dept_supernet, var.cidrs.egress], local.vpn_cidrs))
+# --- Hub ACL -----------------------------------------------------------------
+# Stateless hub ACL: blocks department-to-department transit (Pub A -> Hub -> Pub B)
+# in both directions. On-prem and Internet flows are untouched, and intra-department
+# Pub <-> Private traffic does not cross the Hub. A future hub firewall takes this role.
+resource "scaleway_vpc_acl" "hub" {
+  vpc_id         = scaleway_vpc.this["hub"].id
+  is_ipv6        = false
+  default_policy = "accept"
 
-  vpc_id                     = scaleway_vpc.this["hub"].id
-  source                     = each.value
-  nexthop_private_network_id = scaleway_vpc_private_network.this["hub"].id
-  nexthop_resource_ip        = scaleway_ipam_ip.data_vip["hub"].address
-  description                = "${var.name}: ${each.value} -> active firewall"
-  tags                       = var.tags
+  # On the real API 0-0 means port 0: "all ports" is spelled 0-65535 (see modules/department/nacl.tf).
+  rules {
+    action        = "drop"
+    protocol      = "ANY"
+    source        = var.dept_supernet
+    destination   = var.dept_supernet
+    src_port_low  = 0
+    src_port_high = 65535
+    dst_port_low  = 0
+    dst_port_high = 65535
+    description   = "Inter-department traffic blocked (a hub firewall replaces this rule)"
+  }
 }

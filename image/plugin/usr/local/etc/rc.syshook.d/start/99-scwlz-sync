@@ -1,3 +1,0 @@
-#!/bin/sh
-# Apply this node's configuration from the instance metadata at every boot.
-exec /usr/local/opnsense/scripts/scwlz/sync.sh boot

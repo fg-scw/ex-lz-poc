@@ -1,4 +1,4 @@
-# Landing zone: the DSI hub (central firewall HA, egress, hybrid connectivity)
+# Landing zone: the DSI hub (transit and on-prem links, no firewall)
 # and one project per department, in one root module and one state.
 # Inputs: terraform.tfvars (see terraform.tfvars.example).
 #
@@ -12,10 +12,6 @@ terraform {
     scaleway = {
       source  = "scaleway/scaleway"
       version = "~> 2.86"
-    }
-    random = {
-      source  = "hashicorp/random"
-      version = "~> 3.6"
     }
     time = {
       source  = "hashicorp/time"
@@ -49,18 +45,13 @@ provider "scaleway" {
 module "hub" {
   source = "./modules/hub"
 
-  name                  = var.name
-  project_id            = var.project_id
-  tags                  = var.tags
-  cidrs                 = var.cidrs
-  dept_supernet         = var.dept_supernet
-  egress                = var.egress
-  policy                = var.policy
-  admin_cidrs           = var.admin_cidrs
-  admin_ssh_public_keys = var.admin_ssh_public_keys
-  firewall              = var.firewall
-  vpn                   = var.vpn
-  interlink             = var.interlink
+  name          = var.name
+  project_id    = var.project_id
+  tags          = var.tags
+  cidrs         = var.cidrs
+  dept_supernet = var.dept_supernet
+  vpn           = var.vpn
+  interlink     = var.interlink
 }
 
 module "department" {

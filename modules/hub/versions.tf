@@ -6,9 +6,5 @@ terraform {
       source  = "scaleway/scaleway"
       version = "~> 2.86"
     }
-    random = {
-      source  = "hashicorp/random"
-      version = "~> 3.6"
-    }
   }
 }
