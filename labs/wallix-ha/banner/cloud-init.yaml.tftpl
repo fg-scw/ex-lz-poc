@@ -1,0 +1,49 @@
+#cloud-config
+hostname: ${hostname}
+write_files:
+  - path: /etc/banner-name
+    permissions: "0644"
+    content: |
+      ${node}
+  - path: /etc/banner-node
+    permissions: "0644"
+    content: |
+      banner-node:${node}
+  - path: /usr/local/sbin/banner-listen.py
+    encoding: b64
+    permissions: "0755"
+    content: ${script_b64}
+  - path: /etc/netplan/60-lab.yaml
+    permissions: "0644"
+    content: |
+      network:
+        version: 2
+        ethernets:
+          lab:
+            match:
+              name: "e*"
+            dhcp4: true
+            optional: true
+  - path: /etc/systemd/system/banner-listen.service
+    permissions: "0644"
+    content: |
+      [Unit]
+      Description=TCP banners for the Wallix HA lab
+      After=network-online.target
+      Wants=network-online.target
+
+      [Service]
+      Type=simple
+      ExecStartPre=/usr/sbin/netplan apply
+      ExecStart=/usr/bin/python3 /usr/local/sbin/banner-listen.py
+      Restart=always
+      RestartSec=2
+
+      [Install]
+      WantedBy=multi-user.target
+runcmd:
+  # Port 22 must belong to the banner, which is what the load balancer balances.
+  - systemctl mask --now ssh.socket ssh.service || true
+  - netplan apply || true
+  - systemctl daemon-reload
+  - systemctl enable --now banner-listen.service

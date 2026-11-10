@@ -105,6 +105,8 @@ vpn = {
 | `ciphers` | `ike` et `esp` : `aes256`, `sha256`, `modp2048` | propositions IKE (phase 1) et ESP (phase 2) : `encryption`, `integrity`, `dh_group` |
 | `bgp_links` | `a` : `169.254.100.1/30` (Scaleway), `169.254.100.2/30` (on-prem) ; `b` : `169.254.100.5/30`, `169.254.100.6/30` | adresses BGP `/30` des deux tunnels : `scaleway` et `onprem` |
 
+Le VPN site-à-site n'échange les préfixes qu'en BGP. Une appliance qui ne parle pas BGP ne termine pas le tunnel. La VM customer gateway porte FRR (ASN privé, distinct de 12876) et strongSwan. Le reste du réseau on-prem n'a qu'une route statique vers l'adresse privée de cette VM : `ip route add <cidr Scaleway> via <ip privée du customer gateway>`. C'est le montage du tutoriel [Site-to-Site VPN et strongSwan](https://www.scaleway.com/en/docs/tutorials/s2s-vpn-strongswan/). `onprem_cidrs` alimente `prefix_filter_in` et ne doit pas chevaucher `cidrs` ni `dept_supernet`. Le lab [labs/wallix-ha](../labs/wallix-ha/README.md) mesure le pendant côté bastion : un LB privé en algorithme `first` devant deux appliances.
+
 ### `interlink`
 
 ```hcl
