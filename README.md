@@ -197,6 +197,7 @@ Faites de même dans `fr-par-2` si des VM y ont tourné. Récupérez les `projec
 
 - [docs/CONFIGURATION.md](docs/CONFIGURATION.md) : toutes les options.
 - [docs/IMAGE.md](docs/IMAGE.md) : l'image OPNsense et le plugin.
+- [labs/wallix-ha/README.md](labs/wallix-ha/README.md) : lab Wallix, customer gateway BGP et bastion HA derrière un LB privé.
 
 ## Licence
 

@@ -1,0 +1,15 @@
+# Copier vers terraform.tfvars (non versionné).
+# Le lab a son propre state local, distinct de la landing zone.
+
+admin_cidrs = ["203.0.113.10/32"]
+
+# banner : deux Ubuntu qui répondent par leur nom. C'est ce qui prouve
+# que l'algorithme first envoie tout sur le maître.
+# wallix : image wallix-bastion-12.3.6 (fr-par-1).
+mode = "banner"
+
+# Décommenter pour ouvrir l'assistant Wallix (443 et 2242) depuis admin_cidrs.
+# expose_bastion_admin = true
+
+# Décommenter pour créer le File Storage des enregistrements, sans l'attacher.
+# recordings_filesystem = true

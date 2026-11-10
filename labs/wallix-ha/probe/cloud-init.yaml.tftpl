@@ -1,0 +1,21 @@
+#cloud-config
+write_files:
+  - path: /etc/netplan/60-lab.yaml
+    permissions: "0644"
+    content: |
+      network:
+        version: 2
+        ethernets:
+          lab:
+            match:
+              name: "e*"
+            dhcp4: true
+            optional: true
+runcmd:
+  - mkdir -p /root/.ssh
+  - chmod 700 /root/.ssh
+  - grep -qxF '${public_key}' /root/.ssh/authorized_keys || echo '${public_key}' >> /root/.ssh/authorized_keys
+  - chmod 600 /root/.ssh/authorized_keys
+  - netplan apply || true
+  - DEBIAN_FRONTEND=noninteractive apt-get update -y
+  - DEBIAN_FRONTEND=noninteractive apt-get install -y python3 netcat-openbsd
